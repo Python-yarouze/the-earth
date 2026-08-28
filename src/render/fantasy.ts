@@ -261,47 +261,74 @@ function buildSnowball(r: number): FantasyBuild {
 }
 
 function buildDiscoball(r: number): FantasyBuild {
-  const geo = new THREE.IcosahedronGeometry(r, 2);
   const globe = new THREE.Mesh(
-    geo,
+    new THREE.SphereGeometry(r, 32, 24),
     solid({
-      color: 0xeef2f8,
-      roughness: 0.12,
-      metalness: 0.92,
-      flatShading: true,
-      envMapIntensity: 1.8,
-      emissive: 0x8a9aaa,
-      emissiveIntensity: 0.18,
+      color: 0xd8dce8,
+      roughness: 0.05,
+      metalness: 0.98,
+      envMapIntensity: 2.4,
     }),
   );
   const adornments: THREE.Object3D[] = [];
-  const studMat = solid({
+  const tileMat = solid({
     color: 0xffffff,
-    roughness: 0.08,
+    roughness: 0.04,
     metalness: 1,
-    envMapIntensity: 2,
-    emissive: 0xd0d8e0,
-    emissiveIntensity: 0.2,
+    envMapIntensity: 2.8,
+    emissive: 0xa0a8b8,
+    emissiveIntensity: 0.08,
   });
-  const tmp = new THREE.Vector3();
-  const faces = geo.index;
-  const pos = geo.attributes.position;
-  if (faces) {
-    for (let i = 0; i < faces.count; i += 3) {
-      tmp.set(0, 0, 0);
-      for (let k = 0; k < 3; k++) {
-        const idx = faces.getX(i + k);
-        tmp.x += pos.getX(idx);
-        tmp.y += pos.getY(idx);
-        tmp.z += pos.getZ(idx);
-      }
-      tmp.multiplyScalar(1 / 3);
-      const stud = new THREE.Mesh(new THREE.BoxGeometry(r * 0.1, r * 0.1, r * 0.025), studMat);
-      stud.position.copy(tmp).multiplyScalar(1.03);
-      stud.lookAt(0, 0, 0);
-      adornments.push(stud);
+  const rings = 14;
+  const cols = 28;
+  for (let row = 0; row < rings; row++) {
+    const phi = ((row + 0.5) / rings) * Math.PI;
+    const rowR = Math.sin(phi) * r;
+    const y = Math.cos(phi) * r;
+    const count = Math.max(4, Math.floor(cols * Math.sin(phi)));
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2 + (row % 2) * (Math.PI / count);
+      const tile = new THREE.Mesh(new THREE.PlaneGeometry(r * 0.14, r * 0.14), tileMat);
+      tile.position.set(Math.cos(a) * rowR, y, Math.sin(a) * rowR);
+      tile.lookAt(0, 0, 0);
+      adornments.push(tile);
     }
   }
+  const lamp = new THREE.PointLight(0xfff0d0, 2.2, r * 12);
+  lamp.position.set(r * 1.8, r * 0.6, r * 1.2);
+  const lampMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(r * 0.12, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xfff8e8 }),
+  );
+  lampMesh.position.copy(lamp.position);
+  adornments.push(lamp, lampMesh);
+  return { globe, adornments };
+}
+
+function buildDestroyer(r: number): FantasyBuild {
+  const globe = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 48, 36),
+    solid({
+      color: 0x2a2a32,
+      roughness: 0.55,
+      metalness: 0.35,
+      emissive: 0x101018,
+      emissiveIntensity: 0.25,
+    }),
+  );
+  const adornments: THREE.Object3D[] = [];
+  const trench = new THREE.Mesh(
+    new THREE.TorusGeometry(r * 0.92, r * 0.08, 8, 48),
+    solid({ color: 0x484858, roughness: 0.4, metalness: 0.5, emissive: 0x202028, emissiveIntensity: 0.4 }),
+  );
+  trench.rotation.x = Math.PI / 2;
+  adornments.push(trench);
+  const dish = new THREE.Mesh(
+    new THREE.CylinderGeometry(r * 0.35, r * 0.42, r * 0.12, 24),
+    solid({ color: 0x606070, metalness: 0.6, roughness: 0.3, emissive: 0x303040, emissiveIntensity: 0.5 }),
+  );
+  dish.position.set(0, r * 0.55, 0);
+  adornments.push(dish);
   return { globe, adornments };
 }
 
@@ -423,6 +450,9 @@ export function buildFantasyGlobe(
   }
   if (id === "discoball") {
     return buildDiscoball(r);
+  }
+  if (id === "destroyer") {
+    return buildDestroyer(r);
   }
   if (id === "brick") {
     return buildBrick(r);

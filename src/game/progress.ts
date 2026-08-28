@@ -10,15 +10,22 @@ const KEY = "the-earth-unlocks";
 
 export type ExtraUnlock = "solarsystem" | "extraSlots" | "zen" | "chime" | "chimeLoop";
 
+/** Cumulative watch time required before the sun stone unlocks. */
+export const SUN_WATCH_SEC = 14400;
+
+/** Long stable (60s) episodes required for sun unlock. */
+export const SUN_LONG_STABLES = 3;
+
+/** Manual body count for twelveBodyBalances / sideslip. */
+export const TWELVE_BODY_THRESHOLD = 12;
+
 export interface ExtraDef {
   id: ExtraUnlock;
   label: string;
   hint: string;
-  /** Unlocked catalog blurb. */
   flavor: string;
 }
 
-/** 奏でる plays needed before ながす unlocks. */
 export const CHIME_LOOP_THRESHOLD = 5;
 
 export const EXTRA_DEFS: readonly ExtraDef[] = [
@@ -88,7 +95,6 @@ export interface Progress {
   watchSec: number;
   balances: number;
   tiltedBalances: number;
-  fourBodyBalances: number;
   jupiterBalances: number;
   longStables: number;
   twinBalances: number;
@@ -109,8 +115,36 @@ export interface Progress {
   copiedBalanced: boolean;
   movedEarth: boolean;
   placedExtra: boolean;
-  /** Successful 奏でる plays; gates ながす. */
   chimesPlayed: number;
+  povCameraUsed: boolean;
+  shareUsed: boolean;
+  randomPlacementUsed: boolean;
+  solarPresetBalanced: boolean;
+  twelveBodyBalances: number;
+  destroyerSeen: boolean;
+  /** Counters snapshotted when the solar-system gate first opens. */
+  postSolarBaselines: PostSolarBaselines | null;
+  watchedAfterCollapsePostSolar: boolean;
+  blackHoleSeenPostSolar: boolean;
+}
+
+export interface PostSolarBaselines {
+  watchSec: number;
+  sessionYears: number;
+  sunImpacts: number;
+  moonSurviveSec: number;
+  shipsSeen: number;
+  shatters: number;
+  twinBalances: number;
+  tiltedBalances: number;
+  twelveBodyBalances: number;
+  longStables: number;
+  cometSeen: number;
+}
+
+export interface UnlockContext {
+  sessionYears: number;
+  realYear: number;
 }
 
 const DISCOVERY_IDS = new Set(DISCOVERIES.map((d) => d.id));
@@ -124,7 +158,6 @@ export function defaultProgress(): Progress {
     watchSec: 0,
     balances: 0,
     tiltedBalances: 0,
-    fourBodyBalances: 0,
     jupiterBalances: 0,
     longStables: 0,
     twinBalances: 0,
@@ -146,6 +179,31 @@ export function defaultProgress(): Progress {
     movedEarth: false,
     placedExtra: false,
     chimesPlayed: 0,
+    povCameraUsed: false,
+    shareUsed: false,
+    randomPlacementUsed: false,
+    solarPresetBalanced: false,
+    twelveBodyBalances: 0,
+    destroyerSeen: false,
+    postSolarBaselines: null,
+    watchedAfterCollapsePostSolar: false,
+    blackHoleSeenPostSolar: false,
+  };
+}
+
+function zeroPostSolarBaselines(): PostSolarBaselines {
+  return {
+    watchSec: 0,
+    sessionYears: 0,
+    sunImpacts: 0,
+    moonSurviveSec: 0,
+    shipsSeen: 0,
+    shatters: 0,
+    twinBalances: 0,
+    tiltedBalances: 0,
+    twelveBodyBalances: 0,
+    longStables: 0,
+    cometSeen: 0,
   };
 }
 
@@ -164,6 +222,67 @@ function uniqueDiscoveries(ids: unknown): DiscoveryId[] {
   return [...new Set(ids.filter((id): id is DiscoveryId => DISCOVERY_IDS.has(id as DiscoveryId)))];
 }
 
+export function hasSolarComplete(progress: Progress): boolean {
+  return REAL_PLACEABLE_IDS.every((id) => progress.unlocked.includes(id));
+}
+
+/** Snapshot counters when the solar gate opens; only growth after this counts for non-solar unlocks. */
+export function capturePostSolarBaselines(progress: Progress, ctx: UnlockContext): Progress {
+  if (!hasSolarComplete(progress) || progress.postSolarBaselines) {
+    return progress;
+  }
+  const baselines: PostSolarBaselines = {
+    watchSec: progress.watchSec,
+    sessionYears: ctx.sessionYears,
+    sunImpacts: progress.sunImpacts,
+    moonSurviveSec: progress.moonSurviveSec,
+    shipsSeen: progress.shipsSeen,
+    shatters: progress.shatters,
+    twinBalances: progress.twinBalances,
+    tiltedBalances: progress.tiltedBalances,
+    twelveBodyBalances: progress.twelveBodyBalances,
+    longStables: progress.longStables,
+    cometSeen: progress.cometSeen,
+  };
+  return {
+    ...progress,
+    postSolarBaselines: baselines,
+    povCameraUsed: false,
+    shareUsed: false,
+    randomPlacementUsed: false,
+    solarPresetBalanced: false,
+    watchedAfterCollapsePostSolar: false,
+    blackHoleSeenPostSolar: false,
+  };
+}
+
+type PostSolarCounterKey = Exclude<keyof PostSolarBaselines, "sessionYears">;
+
+function postSolarCount(progress: Progress, key: PostSolarCounterKey): number {
+  if (!hasSolarComplete(progress)) {
+    return 0;
+  }
+  const baselines = progress.postSolarBaselines ?? zeroPostSolarBaselines();
+  return Math.max(0, progress[key] - baselines[key]);
+}
+
+function postSolarYears(progress: Progress, ctx: UnlockContext): number {
+  if (!hasSolarComplete(progress)) {
+    return 0;
+  }
+  const baselines = progress.postSolarBaselines ?? zeroPostSolarBaselines();
+  return Math.max(0, ctx.sessionYears - baselines.sessionYears);
+}
+
+function sunUnlockReady(progress: Progress): boolean {
+  return (
+    hasSolarComplete(progress) &&
+    postSolarCount(progress, "watchSec") >= SUN_WATCH_SEC &&
+    postSolarCount(progress, "twelveBodyBalances") >= 1 &&
+    postSolarCount(progress, "longStables") >= SUN_LONG_STABLES
+  );
+}
+
 export function loadProgress(): Progress {
   const fallback = defaultProgress();
   try {
@@ -171,7 +290,10 @@ export function loadProgress(): Progress {
     if (!raw) {
       return fallback;
     }
-    const parsed = JSON.parse(raw) as Partial<Progress>;
+    const parsed = JSON.parse(raw) as Partial<Progress> & {
+      fourBodyBalances?: number;
+      eightBodyBalances?: number;
+    };
     const unlocked = uniqueIds(
       (parsed.unlocked ?? ["mars"]).filter((id): id is AppearanceId =>
         UNLOCKABLE_IDS.includes(id as AppearanceId),
@@ -181,10 +303,12 @@ export function loadProgress(): Progress {
       unlocked.unshift("mars");
     }
     const extras = uniqueExtras(parsed.extras ?? []);
-    if (extras.includes("solarsystem") && !unlocked.includes("sun")) {
-      unlocked.push("sun");
-    }
-    return {
+    const twelveBodyBalances =
+      Number(parsed.twelveBodyBalances) ||
+      Number((parsed as { eightBodyBalances?: number }).eightBodyBalances) ||
+      (Number((parsed as { fourBodyBalances?: number }).fourBodyBalances) >= 1 ? 1 : 0);
+    const solarComplete = REAL_PLACEABLE_IDS.every((id) => unlocked.includes(id));
+    const loaded: Progress = {
       ...fallback,
       unlocked,
       extras,
@@ -193,7 +317,6 @@ export function loadProgress(): Progress {
       watchSec: Number(parsed.watchSec) || 0,
       balances: Number(parsed.balances) || 0,
       tiltedBalances: Number(parsed.tiltedBalances) || 0,
-      fourBodyBalances: Number(parsed.fourBodyBalances) || 0,
       jupiterBalances: Number(parsed.jupiterBalances) || 0,
       longStables: Number(parsed.longStables) || 0,
       twinBalances: Number(parsed.twinBalances) || 0,
@@ -215,7 +338,19 @@ export function loadProgress(): Progress {
       movedEarth: Boolean(parsed.movedEarth),
       placedExtra: Boolean(parsed.placedExtra),
       chimesPlayed: Number(parsed.chimesPlayed) || 0,
+      povCameraUsed: Boolean(parsed.povCameraUsed),
+      shareUsed: Boolean(parsed.shareUsed),
+      randomPlacementUsed: Boolean(parsed.randomPlacementUsed),
+      solarPresetBalanced: Boolean(parsed.solarPresetBalanced),
+      twelveBodyBalances,
+      destroyerSeen: Boolean(parsed.destroyerSeen),
+      postSolarBaselines: solarComplete
+        ? (parsed.postSolarBaselines ?? zeroPostSolarBaselines())
+        : null,
+      watchedAfterCollapsePostSolar: Boolean(parsed.watchedAfterCollapsePostSolar),
+      blackHoleSeenPostSolar: Boolean(parsed.blackHoleSeenPostSolar),
     };
+    return loaded;
   } catch {
     return fallback;
   }
@@ -270,10 +405,22 @@ function grantExtra(progress: Progress, extra: ExtraUnlock, notice: string, noti
   return { ...progress, extras: [...progress.extras, extra] };
 }
 
-/**
- * Mostly paced by total watch time; a few whimsical stones keep special gates.
- */
-export function tickUnlocks(progress: Progress): {
+function grantFantasy(
+  progress: Progress,
+  id: AppearanceId,
+  notices: string[],
+  granted: AppearanceId[],
+): Progress {
+  if (!hasSolarComplete(progress)) {
+    return progress;
+  }
+  return grant(progress, id, notices, granted);
+}
+
+export function tickUnlocks(
+  progress: Progress,
+  ctx: UnlockContext = { sessionYears: 0, realYear: new Date().getFullYear() },
+): {
   progress: Progress;
   notices: string[];
   grantedAppearances: AppearanceId[];
@@ -283,7 +430,7 @@ export function tickUnlocks(progress: Progress): {
   let next = progress;
   const t = next.watchSec;
 
-  // Real planets — time ladder.
+  // Real planets — cumulative watch time (always counts from game start).
   if (t >= 60) {
     next = grant(next, "mercury", notices, grantedAppearances);
   }
@@ -312,79 +459,105 @@ export function tickUnlocks(progress: Progress): {
     next = grant(next, "asteroid", notices, grantedAppearances);
   }
 
-  // Fantasy — mostly time.
-  if (t >= 480) {
-    next = grant(next, "gaming", notices, grantedAppearances);
+  next = capturePostSolarBaselines(next, ctx);
+
+  const years = postSolarYears(next, ctx);
+  const impacts = postSolarCount(next, "sunImpacts");
+  const moonSec = postSolarCount(next, "moonSurviveSec");
+  const ships = postSolarCount(next, "shipsSeen");
+  const shatters = postSolarCount(next, "shatters");
+  const twins = postSolarCount(next, "twinBalances");
+  const tilted = postSolarCount(next, "tiltedBalances");
+  const twelve = postSolarCount(next, "twelveBodyBalances");
+  const stables = postSolarCount(next, "longStables");
+  const comets = postSolarCount(next, "cometSeen");
+
+  // Fantasy — session years (after solar complete, post-gate years only).
+  if (years >= 50) {
+    next = grantFantasy(next, "puff", notices, grantedAppearances);
   }
-  if (t >= 720) {
-    next = grant(next, "glass", notices, grantedAppearances);
+  if (years >= 100) {
+    next = grantFantasy(next, "clock", notices, grantedAppearances);
   }
-  if (t >= 960) {
-    next = grant(next, "puff", notices, grantedAppearances);
+  if (years >= 200) {
+    next = grantFantasy(next, "contrarian", notices, grantedAppearances);
   }
-  if (t >= 1200) {
-    next = grant(next, "brick", notices, grantedAppearances);
-  }
-  if (t >= 1500) {
-    next = grant(next, "mirror", notices, grantedAppearances);
-  }
-  if (t >= 1650) {
-    next = grant(next, "discoball", notices, grantedAppearances);
-  }
-  if (t >= 1800) {
-    next = grant(next, "dice", notices, grantedAppearances);
-  }
-  if (t >= 2100) {
-    next = grant(next, "bubble", notices, grantedAppearances);
-  }
-  if (t >= 2400) {
-    next = grant(next, "clock", notices, grantedAppearances);
-  }
-  if (t >= 3000) {
-    next = grant(next, "contrarian", notices, grantedAppearances);
-  }
-  if (t >= 3300) {
-    next = grant(next, "takoyaki", notices, grantedAppearances);
-  }
-  if (t >= 3900) {
-    next = grant(next, "sideslip", notices, grantedAppearances);
-  }
-  if (t >= 4500) {
-    next = grant(next, "drowsy", notices, grantedAppearances);
+  if (years >= 400) {
+    next = grantFantasy(next, "gaming", notices, grantedAppearances);
   }
 
-  // Special fantasy gates.
-  if (next.moonSurviveSec >= 30) {
-    next = grant(next, "snowball", notices, grantedAppearances);
+  // Sun impact ladder (post-gate impacts only).
+  if (impacts >= 10) {
+    next = grantFantasy(next, "brick", notices, grantedAppearances);
   }
-  if (next.sunImpacts >= 1) {
-    next = grant(next, "ember", notices, grantedAppearances);
+  if (impacts >= 20) {
+    next = grantFantasy(next, "thunder", notices, grantedAppearances);
   }
-  if (next.watchedAfterCollapse || next.blackHoleSeen) {
-    next = grant(next, "voidseed", notices, grantedAppearances);
+  if (impacts >= 50) {
+    next = grantFantasy(next, "relic", notices, grantedAppearances);
   }
-  if (next.shipsSeen >= 1) {
-    next = grant(next, "sparkle", notices, grantedAppearances);
-  }
-  if (next.cometSeen >= 1) {
-    next = grant(next, "puddle", notices, grantedAppearances);
-  }
-  if (next.flareSeen >= 1) {
-    next = grant(next, "thunder", notices, grantedAppearances);
-  }
-  if (next.shatters >= 2) {
-    next = grant(next, "crumbly", notices, grantedAppearances);
-  }
-  if (next.sunImpacts >= 3) {
-    next = grant(next, "relic", notices, grantedAppearances);
+  if (impacts >= 100) {
+    next = grantFantasy(next, "ember", notices, grantedAppearances);
   }
 
-  if (REAL_PLACEABLE_IDS.every((id) => next.unlocked.includes(id))) {
+  // Visitor / collapse fantasy (post-gate only).
+  if (moonSec >= 30) {
+    next = grantFantasy(next, "snowball", notices, grantedAppearances);
+  }
+  if (next.watchedAfterCollapsePostSolar || next.blackHoleSeenPostSolar) {
+    next = grantFantasy(next, "voidseed", notices, grantedAppearances);
+  }
+  if (ships >= 1) {
+    next = grantFantasy(next, "sparkle", notices, grantedAppearances);
+  }
+  if (comets >= 1) {
+    next = grantFantasy(next, "puddle", notices, grantedAppearances);
+  }
+  if (shatters >= 2) {
+    next = grantFantasy(next, "crumbly", notices, grantedAppearances);
+  }
+
+  // Action fantasy (flags only set after solar gate in app.ts).
+  if (next.povCameraUsed) {
+    next = grantFantasy(next, "glass", notices, grantedAppearances);
+  }
+  if (twins >= 1) {
+    next = grantFantasy(next, "mirror", notices, grantedAppearances);
+  }
+  if (next.shareUsed) {
+    next = grantFantasy(next, "discoball", notices, grantedAppearances);
+  }
+  if (next.randomPlacementUsed) {
+    next = grantFantasy(next, "dice", notices, grantedAppearances);
+  }
+  if (next.solarPresetBalanced) {
+    next = grantFantasy(next, "bubble", notices, grantedAppearances);
+  }
+  if (stables >= 2) {
+    next = grantFantasy(next, "drowsy", notices, grantedAppearances);
+  }
+  if (tilted >= 1) {
+    next = grantFantasy(next, "takoyaki", notices, grantedAppearances);
+  }
+  if (twelve >= 1) {
+    next = grantFantasy(next, "sideslip", notices, grantedAppearances);
+  }
+
+  // Earth — post-gate session years reach real calendar year.
+  if (years >= ctx.realYear) {
+    next = grantFantasy(next, "earth", notices, grantedAppearances);
+  }
+
+  // Solar preset extra (not the sun stone).
+  if (hasSolarComplete(next)) {
     next = grantExtra(next, "solarsystem", "いまの太陽系が置けるようになった", notices);
   }
-  if (next.extras.includes("solarsystem")) {
+
+  // Sun stone — strict separate gate.
+  if (sunUnlockReady(next)) {
     next = grant(next, "sun", notices, grantedAppearances);
   }
+
   if (t >= 2400 || next.balances >= 10) {
     next = grantExtra(next, "extraSlots", "置ける数が増えた", notices);
   }
@@ -398,7 +571,7 @@ export function tickUnlocks(progress: Progress): {
     next = grantExtra(next, "chimeLoop", "音がながせるようになった", notices);
   }
 
-  const discovered = evaluateDiscoveries(next);
+  const discovered = evaluateDiscoveries(next, ctx);
   next = discovered.progress;
   notices.push(...discovered.notices);
 
@@ -412,8 +585,9 @@ export function markPlayed(progress: Progress): Progress {
   return { ...progress, hasPlayed: true };
 }
 
-/** True when any non-ephemeral appearance appears at least twice. */
-export function hasDuplicateAppearance(bodies: readonly { alive: boolean; ephemeral?: boolean; appearance: AppearanceId }[]): boolean {
+export function hasDuplicateAppearance(
+  bodies: readonly { alive: boolean; ephemeral?: boolean; appearance: AppearanceId }[],
+): boolean {
   const counts = new Map<AppearanceId, number>();
   for (const b of bodies) {
     if (!b.alive || b.ephemeral) {

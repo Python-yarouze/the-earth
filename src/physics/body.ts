@@ -38,7 +38,8 @@ export type AppearanceId =
   | "thunder"
   | "crumbly"
   | "sideslip"
-  | "relic";
+  | "relic"
+  | "destroyer";
 
 export interface Body {
   id: number;

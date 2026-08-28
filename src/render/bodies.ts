@@ -60,7 +60,8 @@ const DRAW: Record<AppearanceId, number> = {
   thunder: 3.1,
   crumbly: 3.4,
   sideslip: 2.9,
-  relic: 3.0,
+  relic: 2.0,
+  destroyer: 0.45,
 };
 
 const MIN_R: Partial<Record<AppearanceId, number>> = {
@@ -82,10 +83,11 @@ const MIN_R: Partial<Record<AppearanceId, number>> = {
   takoyaki: 4.5,
   puddle: 5.2,
   crumbly: 4.0,
-  relic: 4.3,
+  relic: 2.8,
+  destroyer: 48,
 };
 
-const FANTASY_SET = new Set<string>(FANTASY_PLACEABLE_IDS);
+const FANTASY_SET = new Set<string>([...FANTASY_PLACEABLE_IDS, "destroyer"]);
 
 export function visualRadius(body: Body): number {
   const draw = DRAW[body.appearance] ?? 3;

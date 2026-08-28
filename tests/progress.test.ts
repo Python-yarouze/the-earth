@@ -3,14 +3,47 @@ import { REAL_PLACEABLE_IDS } from "../src/game/catalog";
 import {
   CHIME_LOOP_THRESHOLD,
   EXTRA_DEFS,
+  SUN_LONG_STABLES,
+  SUN_WATCH_SEC,
+  TWELVE_BODY_THRESHOLD,
   defaultProgress,
   extraHint,
   extraLabel,
   hasChime,
   hasChimeLoop,
   hasDuplicateAppearance,
+  hasSolarComplete,
   tickUnlocks,
+  type PostSolarBaselines,
 } from "../src/game/progress";
+
+const solarComplete = [...REAL_PLACEABLE_IDS];
+
+function zeroBaselines(): PostSolarBaselines {
+  return {
+    watchSec: 0,
+    sessionYears: 0,
+    sunImpacts: 0,
+    moonSurviveSec: 0,
+    shipsSeen: 0,
+    shatters: 0,
+    twinBalances: 0,
+    tiltedBalances: 0,
+    twelveBodyBalances: 0,
+    longStables: 0,
+    cometSeen: 0,
+  };
+}
+
+/** Solar gate open; legacy saves use zero baselines so prior progress still counts. */
+function afterSolar(overrides: Record<string, unknown> = {}) {
+  return {
+    ...defaultProgress(),
+    unlocked: [...solarComplete],
+    postSolarBaselines: zeroBaselines(),
+    ...overrides,
+  };
+}
 
 describe("unlocks", () => {
   it("starts with mars and unlocks mercury after watching a minute", () => {
@@ -27,26 +60,134 @@ describe("unlocks", () => {
     expect(progress.unlocked).toContain("pluto");
   });
 
-  it("opens the solar preset after every real placeable is owned (fantasy not required)", () => {
-    const next = tickUnlocks({
-      ...defaultProgress(),
-      unlocked: [...REAL_PLACEABLE_IDS],
-    });
+  it("opens the solar preset after every real placeable is owned without granting sun", () => {
+    const next = tickUnlocks(afterSolar());
     expect(next.progress.extras).toContain("solarsystem");
-    expect(next.progress.unlocked).toContain("sun");
+    expect(next.progress.unlocked).not.toContain("sun");
     expect(next.progress.unlocked).not.toContain("gaming");
     expect(next.notices.some((n) => n.includes("太陽系"))).toBe(true);
   });
 
-  it("grants time-based fantasy and keeps special gates", () => {
-    const gaming = tickUnlocks({ ...defaultProgress(), watchSec: 480 });
+  it("does not grant fantasy before solar complete even with high session years", () => {
+    const next = tickUnlocks(
+      { ...defaultProgress(), unlocked: ["mars"] },
+      { sessionYears: 400, realYear: 2026 },
+    );
+    expect(next.progress.unlocked).not.toContain("gaming");
+    expect(next.progress.unlocked).not.toContain("puff");
+  });
+
+  it("grants session-year fantasy after solar complete", () => {
+    const base = afterSolar();
+    const puff = tickUnlocks(base, { sessionYears: 50, realYear: 2026 });
+    expect(puff.progress.unlocked).toContain("puff");
+    const gaming = tickUnlocks(base, { sessionYears: 400, realYear: 2026 });
     expect(gaming.progress.unlocked).toContain("gaming");
-    const snow = tickUnlocks({ ...defaultProgress(), moonSurviveSec: 30 });
+  });
+
+  it("counts session-year fantasy only after the solar gate", () => {
+    const atGate = tickUnlocks(
+      { ...defaultProgress(), unlocked: [...solarComplete], watchSec: 3600 },
+      { sessionYears: 400, realYear: 2026 },
+    );
+    expect(atGate.progress.postSolarBaselines?.sessionYears).toBe(400);
+    const puff = tickUnlocks(atGate.progress, { sessionYears: 449, realYear: 2026 });
+    expect(puff.progress.unlocked).not.toContain("puff");
+    const puffReady = tickUnlocks(atGate.progress, { sessionYears: 450, realYear: 2026 });
+    expect(puffReady.progress.unlocked).toContain("puff");
+    const gaming = tickUnlocks(atGate.progress, { sessionYears: 800, realYear: 2026 });
+    expect(gaming.progress.unlocked).toContain("gaming");
+  });
+
+  it("grants sun impact ladder and event gates", () => {
+    const base = afterSolar();
+    const brick = tickUnlocks({ ...base, sunImpacts: 10 });
+    expect(brick.progress.unlocked).toContain("brick");
+    const ember = tickUnlocks({ ...base, sunImpacts: 100 });
+    expect(ember.progress.unlocked).toContain("ember");
+    expect(ember.progress.unlocked).toContain("brick");
+    const snow = tickUnlocks({ ...base, moonSurviveSec: 30 });
     expect(snow.progress.unlocked).toContain("snowball");
-    const voided = tickUnlocks({ ...defaultProgress(), blackHoleSeen: true });
-    expect(voided.progress.unlocked).toContain("voidseed");
-    const sparkle = tickUnlocks({ ...defaultProgress(), shipsSeen: 1 });
-    expect(sparkle.progress.unlocked).toContain("sparkle");
+    const dice = tickUnlocks({ ...base, randomPlacementUsed: true });
+    expect(dice.progress.unlocked).toContain("dice");
+    const bubble = tickUnlocks({ ...base, solarPresetBalanced: true });
+    expect(bubble.progress.unlocked).toContain("bubble");
+    const sideslip = tickUnlocks({ ...base, twelveBodyBalances: 1 });
+    expect(sideslip.progress.unlocked).toContain("sideslip");
+  });
+
+  it("ignores pre-gate counters for fantasy unlocks", () => {
+    const gated = tickUnlocks(
+      { ...defaultProgress(), unlocked: [...solarComplete], sunImpacts: 50, watchSec: 3600 },
+      { sessionYears: 0, realYear: 2026 },
+    );
+    expect(gated.progress.postSolarBaselines?.sunImpacts).toBe(50);
+    const brick = tickUnlocks(gated.progress, { sessionYears: 0, realYear: 2026 });
+    expect(brick.progress.unlocked).not.toContain("brick");
+    const after = tickUnlocks(
+      { ...gated.progress, sunImpacts: 60 },
+      { sessionYears: 0, realYear: 2026 },
+    );
+    expect(after.progress.unlocked).toContain("brick");
+  });
+
+  it("grants sun only after strict composite conditions", () => {
+    const almost = tickUnlocks(
+      afterSolar({
+        watchSec: SUN_WATCH_SEC,
+        twelveBodyBalances: 1,
+        longStables: SUN_LONG_STABLES - 1,
+      }),
+    );
+    expect(almost.progress.unlocked).not.toContain("sun");
+
+    const ready = tickUnlocks(
+      afterSolar({
+        watchSec: SUN_WATCH_SEC,
+        twelveBodyBalances: 1,
+        longStables: SUN_LONG_STABLES,
+      }),
+    );
+    expect(ready.progress.unlocked).toContain("sun");
+  });
+
+  it("counts sun unlock watch time only after the solar gate", () => {
+    const gated = tickUnlocks(
+      {
+        ...defaultProgress(),
+        unlocked: [...solarComplete],
+        watchSec: SUN_WATCH_SEC,
+        twelveBodyBalances: 1,
+        longStables: SUN_LONG_STABLES,
+      },
+      { sessionYears: 0, realYear: 2026 },
+    );
+    expect(gated.progress.unlocked).not.toContain("sun");
+    const ready = tickUnlocks(
+      {
+        ...gated.progress,
+        watchSec: gated.progress.watchSec + SUN_WATCH_SEC,
+        twelveBodyBalances: gated.progress.twelveBodyBalances + 1,
+        longStables: gated.progress.longStables + SUN_LONG_STABLES,
+      },
+      { sessionYears: 0, realYear: 2026 },
+    );
+    expect(ready.progress.unlocked).toContain("sun");
+  });
+
+  it("grants earth when post-gate session years reach real year", () => {
+    const next = tickUnlocks(afterSolar(), { sessionYears: 2026, realYear: 2026 });
+    expect(next.progress.unlocked).toContain("earth");
+    expect(next.notices.some((n) => n.includes("現代"))).toBe(true);
+  });
+
+  it("does not grant earth from pre-gate session years alone", () => {
+    const gated = tickUnlocks(
+      { ...defaultProgress(), unlocked: [...solarComplete], watchSec: 3600 },
+      { sessionYears: 2026, realYear: 2026 },
+    );
+    const next = tickUnlocks(gated.progress, { sessionYears: 2026, realYear: 2026 });
+    expect(next.progress.unlocked).not.toContain("earth");
   });
 
   it("grants chime after a twin-planet balance", () => {
@@ -89,12 +230,13 @@ describe("unlocks", () => {
     ).toBe(false);
   });
 
-  it("grants sun when solarsystem is already owned", () => {
-    const next = tickUnlocks({
-      ...defaultProgress(),
-      extras: ["solarsystem"],
-    });
-    expect(next.progress.unlocked).toContain("sun");
+  it("reports solar complete when all real placeables are owned", () => {
+    expect(hasSolarComplete(defaultProgress())).toBe(false);
+    expect(hasSolarComplete({ ...defaultProgress(), unlocked: [...solarComplete] })).toBe(true);
+  });
+
+  it("exposes twelve body threshold constant", () => {
+    expect(TWELVE_BODY_THRESHOLD).toBe(12);
   });
 
   it("grants zen after a long watch", () => {

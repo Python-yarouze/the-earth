@@ -23,6 +23,7 @@ import { formatSpeed, SIM_SPEEDS, type SimSpeed } from "../game/speed";
 import type { StageDef } from "../game/stages";
 import type { Phase } from "../game/state";
 import type { AppearanceId, Body } from "../physics/body";
+import { CREDITS_LINES } from "../game/finale";
 
 export function splitTipLines(text: string, copied = false): string[] {
   const lines = text
@@ -53,6 +54,16 @@ export function simTipText(mood: Mood): string {
     return "静かなバランス。";
   }
   return "地球が太陽を1周すると1年。惑星をクリックすると、そこから周りを見る。";
+}
+
+function creditsPanel(progress: number): string {
+  const lines = CREDITS_LINES.map((line) => `<p>${line}</p>`).join("");
+  const offset = Math.round(progress * 120);
+  const done = progress >= 1;
+  return `<div class="credits-roll" aria-live="polite">
+    <div class="credits-scroll" style="transform: translateY(${offset}%)">${lines}</div>
+    ${done ? `<button class="cta credits-end" data-act="finale-end">やり直す</button>` : ""}
+  </div>`;
 }
 
 function tipCaptionBl(lines: string[]): string {
@@ -246,6 +257,7 @@ export class Hud {
     shareUrl: string | null;
     simSpeed: SimSpeed;
     chimeLoop: boolean;
+    finaleProgress?: number | null;
   }): void {
     const {
       phase,
@@ -261,6 +273,7 @@ export class Hud {
       shareUrl,
       simSpeed,
       chimeLoop,
+      finaleProgress = null,
     } = opts;
 
     if (phase === "title") {
@@ -331,6 +344,7 @@ export class Hud {
     const paletteIds = stage?.sandbox
       ? [
           ...(isUnlocked(progress, "sun") ? (["sun"] as AppearanceId[]) : []),
+          ...(isUnlocked(progress, "earth") ? (["earth"] as AppearanceId[]) : []),
           ...PLACEABLE_IDS,
         ]
       : (stage?.appearances ?? []);
@@ -405,6 +419,16 @@ export class Hud {
               </div>
             </div>
           </div>
+        </div>`;
+      return;
+    }
+
+    if (phase === "finale") {
+      const prog = finaleProgress ?? 0;
+      this.root.innerHTML = `
+        <div class="hud edge-hud slim finale-hud">
+          ${creditsPanel(prog)}
+          <span class="hud-year" data-time>${formatYearClock(stats)}</span>
         </div>`;
       return;
     }

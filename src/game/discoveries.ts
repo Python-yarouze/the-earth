@@ -1,6 +1,6 @@
 import type { AppearanceId } from "../physics/body";
 import { REAL_PLACEABLE_IDS, catalogLabel } from "./catalog";
-import type { ExtraUnlock, Progress } from "./progress";
+import type { ExtraUnlock, Progress, UnlockContext } from "./progress";
 
 export type DiscoveryId =
   | "first-merge"
@@ -13,7 +13,9 @@ export type DiscoveryId =
   | "swarm-seen"
   | "flare-seen"
   | "blackhole-seen"
-  | "bigbang-seen";
+  | "bigbang-seen"
+  | "caught-up-to-present"
+  | "destroyer-seen";
 
 export interface DiscoveryDef {
   id: DiscoveryId;
@@ -21,7 +23,7 @@ export interface DiscoveryDef {
   hint: string;
   /** Unlocked catalog blurb. */
   flavor: string;
-  ready: (p: Progress) => boolean;
+  ready: (p: Progress, ctx?: UnlockContext) => boolean;
 }
 
 export const DISCOVERIES: readonly DiscoveryDef[] = [
@@ -102,6 +104,20 @@ export const DISCOVERIES: readonly DiscoveryDef[] = [
     flavor: "中心が吞み込まれたとき、すべてが一瞬の光に還る。",
     ready: (p) => p.bigBangSeen,
   },
+  {
+    id: "caught-up-to-present",
+    notice: "現代に追いついた",
+    hint: "とても長い年が経った先に",
+    flavor: "地球の年が、いまの時代に追いついた。もうひとつ、地球を置ける。",
+    ready: (p, ctx) => ctx !== undefined && p.unlocked.includes("earth"),
+  },
+  {
+    id: "destroyer-seen",
+    notice: "破壊星が現れた",
+    hint: "二つの太陽が静かになった先に",
+    flavor: "巨大な影が近づく。新世界の旋律とともに、すべてが飲み込まれていく。",
+    ready: (p) => p.destroyerSeen,
+  },
 ];
 
 const BY_ID = new Map(DISCOVERIES.map((d) => [d.id, d]));
@@ -135,50 +151,52 @@ export function appearanceHint(id: AppearanceId): string {
       return "遠い時間の先に";
     case "asteroid":
       return "長い観察の果てに";
+    case "earth":
+      return "とても長い時間が経った先に";
     case "sun":
-      return "太陽系の石をそろえた先に";
+      return "とても長く見守り、大きな系を何度も落ち着かせた先に";
     case "gaming":
-      return "しばらく遊んだ先に";
+      return "とても長い年がまわった先に";
     case "glass":
-      return "眺めを続けた先に";
+      return "一つの星に寄った先に";
     case "puff":
-      return "もう少し長く見た先に";
+      return "長い年がまわった先に";
     case "brick":
-      return "長く見守った先に";
+      return "太陽に何度も触れた先に";
     case "mirror":
-      return "さらに長く眺めた先に";
+      return "同じ星が二つある静けさの先に";
     case "discoball":
-      return "かがみを見たあとに";
+      return "誰かに見せた先に";
     case "snowball":
       return "月がそばに残った先に";
     case "ember":
-      return "太陽に触れた先に";
+      return "とても何度も太陽に触れた先に";
     case "contrarian":
-      return "長い時間の先に";
+      return "長い年がまわった先に";
     case "dice":
-      return "眺めを重ねた先に";
+      return "ランダムに並べた先に";
     case "bubble":
-      return "もっと長く見た先に";
+      return "いまの太陽系を並べて落ち着いた先に";
     case "clock":
-      return "長い観察の先に";
+      return "長い年がまわった先に";
     case "voidseed":
       return "崩れたあとも見たか、暗い点を見た先に";
     case "sparkle":
       return "船を見た先に";
     case "drowsy":
-      return "とても長く眺めた先に";
+      return "長い静けさを何度か見た先に";
     case "takoyaki":
-      return "長い時間の先に";
+      return "高いところに置いた先に";
     case "puddle":
       return "長い尾を見た先に";
     case "thunder":
-      return "空が一瞬色づいた先に";
+      return "何度も太陽に触れた先に";
     case "crumbly":
       return "何度か砕けた先に";
     case "sideslip":
-      return "遠い時間の先に";
+      return "もっとたくさん並べた先に";
     case "relic":
-      return "太陽に何度も触れた先に";
+      return "とても何度も太陽に触れた先に";
     default:
       return "まだ見ぬ惑星";
   }
@@ -278,12 +296,15 @@ export function canSpawnDarkCompanion(progress: Progress): boolean {
   return progress.blackHoleSeen || hasDiscovery(progress, "blackhole-seen");
 }
 
-export function evaluateDiscoveries(progress: Progress): { progress: Progress; notices: string[] } {
+export function evaluateDiscoveries(
+  progress: Progress,
+  ctx?: UnlockContext,
+): { progress: Progress; notices: string[] } {
   const notices: string[] = [];
   let next = progress;
   const found = new Set(next.discoveries);
   for (const d of DISCOVERIES) {
-    if (found.has(d.id) || !d.ready(next)) {
+    if (found.has(d.id) || !d.ready(next, ctx)) {
       continue;
     }
     found.add(d.id);

@@ -1,1 +1,1 @@
-export type Phase = "title" | "unlocks" | "build" | "simulate" | "watch";
+export type Phase = "title" | "unlocks" | "build" | "simulate" | "watch" | "finale";

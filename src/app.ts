@@ -4,19 +4,29 @@ import { Sound } from "./audio/sound";
 import { catalogEntry, catalogLabel } from "./game/catalog";
 import { createStats, evaluateFrame, type EarthStats } from "./game/evaluation";
 import {
+  createFinale,
+  finaleProgress,
+  spawnDestroyer,
+  tickFinale,
+  type FinaleState,
+} from "./game/finale";
+import {
   hasChime,
   hasChimeLoop,
   hasDuplicateAppearance,
   hasExtraSlots,
+  hasSolarComplete,
   hasSolarPreset,
   isUnlocked,
   loadProgress,
   markPlayed,
   saveProgress,
   tickUnlocks,
+  TWELVE_BODY_THRESHOLD,
   type Progress,
+  type UnlockContext,
 } from "./game/progress";
-import { buildShareUrl, decodeShareFromLocation, shareableBodies } from "./game/share";
+import { buildShareUrl, decodeShareFromLocation } from "./game/share";
 import { randomSandboxBodies } from "./game/randomize";
 import { parseSimSpeed, POV_SIM_SCALE, type SimSpeed } from "./game/speed";
 import { solarSystemBodies } from "./game/solarsystem";
@@ -121,8 +131,10 @@ export class Game {
   private cinema: CinemaState = createCinema();
   private cinemaStarted = false;
   private usedSolarPreset = false;
+  private buildFromSolarPreset = false;
   private collapseWatchSec = 0;
   private bigBangPending = false;
+  private finale: FinaleState = createFinale();
   /** Positions before the latest physics step — used to smooth slow-motion rendering. */
   private prevSnap = new Map<number, { x: number; y: number; z: number; spin: number }>();
 
@@ -160,7 +172,12 @@ export class Game {
       shareUrl: this.shareUrl,
       simSpeed: this.simSpeed,
       chimeLoop: this.chimeLoop,
+      finaleProgress: this.phase === "finale" ? finaleProgress(this.finale) : null,
     });
+  }
+
+  private unlockCtx(): UnlockContext {
+    return { sessionYears: this.stats.years, realYear: new Date().getFullYear() };
   }
 
   private simTipLines(): string[] {
@@ -225,6 +242,12 @@ export class Game {
     if (this.cinema.active) {
       cancelCinema(this.cinema);
     }
+    if (this.phase === "simulate" || this.phase === "watch") {
+      if (hasSolarComplete(this.progress)) {
+        this.progress = { ...this.progress, povCameraUsed: true };
+        this.applyUnlocks();
+      }
+    }
     this.selectedId = body.id;
     this.flashTipBl([`${catalogLabel(body.appearance)}から周りを見る。`]);
   }
@@ -276,7 +299,7 @@ export class Game {
   }
 
   private applyUnlocks(): void {
-    const { progress, notices, grantedAppearances } = tickUnlocks(this.progress);
+    const { progress, notices, grantedAppearances } = tickUnlocks(this.progress, this.unlockCtx());
     this.progress = progress;
     this.persist();
     for (const n of notices) {
@@ -350,6 +373,9 @@ export class Game {
 
     if (this.live.some((x) => x.alive && isBlackHole(x) && !x.ephemeral)) {
       patch.blackHoleSeen = true;
+      if (hasSolarComplete(this.progress)) {
+        patch.blackHoleSeenPostSolar = true;
+      }
     }
 
     this.progress = { ...this.progress, ...patch };
@@ -397,10 +423,11 @@ export class Game {
     const pick = catalogEntry(this.pickAppearance);
     const placingSun = pick.kind === "sun";
     const placingPlanet = pick.kind === "planet";
+    const placingEarth = pick.kind === "earth";
     if (
       !p ||
       !this.stage.allowPlanets ||
-      (!placingPlanet && !placingSun) ||
+      (!placingPlanet && !placingSun && !placingEarth) ||
       !isUnlocked(this.progress, this.pickAppearance) ||
       (!placingSun && planetCount(this.build) >= this.planetCap()) ||
       this.build.filter((b) => b.alive && !b.ephemeral).length >= this.bodyCap()
@@ -409,6 +436,7 @@ export class Game {
     }
     const planet = makePlanet(this.pickAppearance, p);
     this.build.push(planet);
+    this.buildFromSolarPreset = false;
     this.selectedId = planet.id;
     this.orbit();
     this.sound.click();
@@ -436,6 +464,8 @@ export class Game {
     this.tipBlTimer = 0;
     this.tipBlLines = [];
     this.usedSolarPreset = false;
+    this.buildFromSolarPreset = false;
+    this.finale = createFinale();
     this.world.trails.reset();
     this.world.clearShip();
     this.world.clearViews();
@@ -488,6 +518,7 @@ export class Game {
 
   private resetBuild(): void {
     this.stopChimeLoop(false);
+    this.sound.stopFinaleMusic();
     this.clearObserveFocus(false);
     cancelCinema(this.cinema);
     this.cinemaStarted = false;
@@ -503,6 +534,61 @@ export class Game {
     this.world.resetCamera();
     this.show(this.build);
     this.refreshHud();
+  }
+
+  private hasHighPlacement(): boolean {
+    return this.build.some((b) => b.alive && !b.ephemeral && Math.abs(b.pos.y) > 8);
+  }
+
+  private noteBalanced(): void {
+    const twin = hasDuplicateAppearance(this.live);
+    const bodies = extraBodyCount(this.live);
+    const patch: Partial<Progress> = {
+      balances: this.progress.balances + 1,
+      twinBalances: this.progress.twinBalances + (twin ? 1 : 0),
+    };
+    if (this.hasHighPlacement()) {
+      patch.tiltedBalances = this.progress.tiltedBalances + 1;
+    }
+    if (this.buildFromSolarPreset && hasSolarComplete(this.progress)) {
+      patch.solarPresetBalanced = true;
+    } else if (bodies >= TWELVE_BODY_THRESHOLD) {
+      patch.twelveBodyBalances = this.progress.twelveBodyBalances + 1;
+    }
+    this.progress = { ...this.progress, ...patch };
+    this.applyUnlocks();
+
+    const sunCount = this.live.filter((b) => b.alive && b.kind === "sun").length;
+    if (sunCount >= 2 && !this.progress.destroyerSeen) {
+      this.startFinale();
+    }
+  }
+
+  private startFinale(): void {
+    if (this.phase === "finale" || this.finale.active) {
+      return;
+    }
+    this.stopChimeLoop(false);
+    this.clearObserveFocus(false);
+    cancelCinema(this.cinema);
+    this.finale = createFinale();
+    this.finale.active = true;
+    const destroyer = spawnDestroyer(this.live);
+    this.live.push(destroyer);
+    this.finale.destroyerId = destroyer.id;
+    this.progress = { ...this.progress, destroyerSeen: true };
+    this.applyUnlocks();
+    this.phase = "finale";
+    this.sound.startFinaleMusic();
+    this.flashNotice("破壊星が現れた");
+    this.refreshHud();
+  }
+
+  private endFinale(): void {
+    this.sound.stopFinaleMusic();
+    this.finale = createFinale();
+    this.enterStage(sandboxStage());
+    this.sound.click();
   }
 
   /** Distance-from-sun arpeggio: flash + tone. Ignores re-entry while playing. */
@@ -616,6 +702,10 @@ export class Game {
 
   private openShare(): void {
     this.tipsOpen = false;
+    if (hasSolarComplete(this.progress)) {
+      this.progress = { ...this.progress, shareUsed: true };
+      this.applyUnlocks();
+    }
     this.shareUrl = this.buildShareUrl();
     this.refreshHud();
     this.sound.click();
@@ -637,14 +727,21 @@ export class Game {
       window.prompt("このリンクをコピー", url);
     }
     this.copied = true;
-    if (this.stats.everBalanced || this.stats.mood === "balanced") {
-      this.progress = { ...this.progress, copiedBalanced: true };
+    if (hasSolarComplete(this.progress)) {
+      this.progress = { ...this.progress, shareUsed: true };
+      if (this.stats.everBalanced || this.stats.mood === "balanced") {
+        this.progress = { ...this.progress, copiedBalanced: true };
+      }
+      this.applyUnlocks();
     }
-    this.applyUnlocks();
     this.flashTipBl(["リンクをコピーした。"]);
   }
 
   private shareToX(): void {
+    if (hasSolarComplete(this.progress)) {
+      this.progress = { ...this.progress, shareUsed: true };
+      this.applyUnlocks();
+    }
     const url = this.shareUrl ?? this.buildShareUrl();
     const text = "THE EARTH — 軌道のバランスを眺める";
     const intent = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
@@ -652,6 +749,10 @@ export class Game {
   }
 
   private shareToLine(): void {
+    if (hasSolarComplete(this.progress)) {
+      this.progress = { ...this.progress, shareUsed: true };
+      this.applyUnlocks();
+    }
     const url = this.shareUrl ?? this.buildShareUrl();
     const intent = `https://social-plugins.line.me/lineit/share?url=${encodeURIComponent(url)}`;
     window.open(intent, "_blank", "noopener,noreferrer");
@@ -685,6 +786,8 @@ export class Game {
         this.shareToX();
       } else if (act === "share-line") {
         this.shareToLine();
+      } else if (act === "finale-end") {
+        this.endFinale();
       } else if (act === "unlocks" && this.phase === "build") {
         this.phase = "unlocks";
         this.refreshHud();
@@ -727,6 +830,7 @@ export class Game {
         this.world.clearViews();
         this.build = solarSystemBodies();
         this.usedSolarPreset = true;
+        this.buildFromSolarPreset = true;
         this.selectedId = this.build.find((b) => b.kind === "earth")?.id ?? null;
         this.earthStart = clone(this.build.find((b) => b.kind === "earth")?.pos ?? vec3(80, 0, 0));
         this.show(this.build);
@@ -738,6 +842,11 @@ export class Game {
         this.world.trails.reset();
         this.build = randomSandboxBodies(this.progress.unlocked);
         this.usedSolarPreset = false;
+        this.buildFromSolarPreset = false;
+        if (hasSolarComplete(this.progress)) {
+          this.progress = { ...this.progress, randomPlacementUsed: true };
+          this.applyUnlocks();
+        }
         this.selectedId = this.build.find((b) => b.kind === "earth")?.id ?? null;
         this.earthStart = clone(this.build.find((b) => b.kind === "earth")?.pos ?? vec3(80, 0, 0));
         this.pickAppearance = "mars";
@@ -752,6 +861,7 @@ export class Game {
         this.build = initialBodies(this.stage);
         this.orbit();
         this.usedSolarPreset = false;
+        this.buildFromSolarPreset = false;
         this.selectedId = this.build.find((b) => b.kind === "earth")?.id ?? null;
         this.earthStart = clone(this.build.find((b) => b.kind === "earth")?.pos ?? vec3(80, 0, 0));
         this.world.resetCamera();
@@ -802,6 +912,7 @@ export class Game {
       this.ndc(e);
       const hit = this.world.pickBody(this.pointer, this.build);
       if (hit) {
+        this.buildFromSolarPreset = false;
         this.selectedId = hit.id;
         this.clickAt = null;
         const locked = !canMoveBody(this.stage, hit);
@@ -890,6 +1001,7 @@ export class Game {
         const b = this.selected();
         if (b && b.kind === "planet") {
           this.build = this.build.filter((x) => x.id !== b.id);
+          this.buildFromSolarPreset = false;
           this.selectedId = null;
           this.refreshHud();
           this.show(this.build);
@@ -1044,7 +1156,11 @@ export class Game {
       if (this.stats.mood === "collapsed") {
         this.collapseWatchSec += dt;
         if (this.collapseWatchSec >= 30 && !this.progress.watchedAfterCollapse) {
-          this.progress = { ...this.progress, watchedAfterCollapse: true };
+          const patch: Partial<Progress> = { watchedAfterCollapse: true };
+          if (hasSolarComplete(this.progress)) {
+            patch.watchedAfterCollapsePostSolar = true;
+          }
+          this.progress = { ...this.progress, ...patch };
           this.applyUnlocks();
         }
       }
@@ -1075,21 +1191,7 @@ export class Game {
       if (this.stats.mood !== this.lastMood) {
         this.lastMood = this.stats.mood;
         if (this.stats.mood === "balanced") {
-          const earthBuild = this.build.find((b) => b.kind === "earth");
-          const twin = hasDuplicateAppearance(this.live);
-          this.progress = {
-            ...this.progress,
-            balances: this.progress.balances + 1,
-            twinBalances: this.progress.twinBalances + (twin ? 1 : 0),
-            tiltedBalances:
-              this.progress.tiltedBalances + (earthBuild && Math.abs(earthBuild.pos.y) > 8 ? 1 : 0),
-            fourBodyBalances:
-              this.progress.fourBodyBalances + (extraBodyCount(this.live) >= 4 ? 1 : 0),
-            jupiterBalances:
-              this.progress.jupiterBalances +
-              (shareableBodies(this.build).some((b) => b.appearance === "jupiter") ? 1 : 0),
-          };
-          this.applyUnlocks();
+          this.noteBalanced();
         }
         this.flashTipBl(this.simTipLines());
       }
@@ -1109,6 +1211,42 @@ export class Game {
       this.world.trails.push(display);
       this.show(display);
       this.hud.setTime(this.stats);
+    } else if (this.phase === "finale") {
+      const rate = this.simSpeed;
+      this.acc += dt * rate;
+      let steps = 0;
+      const maxSteps = Math.max(8, Math.ceil(12 * rate));
+      while (this.acc >= DT && steps < maxSteps) {
+        this.snapshotLive();
+        this.acc -= DT;
+        steps += 1;
+        step(this.live, DT, G);
+        const heat = applySolarHeat(this.live, DT);
+        if (heat) {
+          this.world.pulse(heat.pos, heat.kind);
+          this.sound.collide(heat.kind);
+        }
+        const ev = resolveCollisions(this.live);
+        if (ev) {
+          this.world.pulse(ev.pos, ev.kind);
+          this.sound.collide(ev.kind);
+          this.noteCollision(ev);
+        }
+        this.stats = evaluateFrame(this.live, this.stats, DT, null);
+      }
+      const destroyer = this.live.find((b) => b.id === this.finale.destroyerId && b.alive);
+      const target =
+        this.live.find((b) => b.alive && b.kind === "sun") ??
+        this.live.find((b) => b.alive && b.kind === "earth");
+      tickFinale(this.finale, dt, destroyer, target);
+      this.progress = { ...this.progress, watchSec: this.progress.watchSec + dt };
+      this.dropObserveFocusIfGone();
+      const display = this.displayBodies(this.acc / DT);
+      tickCinema(this.cinema, dt, display, this.world.camera, this.world.controls);
+      this.world.trails.push(display);
+      this.show(display);
+      this.hud.setTime(this.stats);
+      this.refreshHud();
     } else if (this.phase === "build") {
       this.show(this.build);
     }

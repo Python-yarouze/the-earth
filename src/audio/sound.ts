@@ -6,6 +6,8 @@ export class Sound {
   private sequenceTimer: number | null = null;
   private loopTimer: number | null = null;
   private looping = false;
+  private finaleTimer: number | null = null;
+  private finaleNodes: OscillatorNode[] = [];
 
   private ensure(): AudioContext {
     if (!this.ctx) {
@@ -221,5 +223,70 @@ export class Sound {
         }
       }, 900);
     }
+  }
+
+  /** Simplified "From the New World" (Largo) arrangement for the destroyer finale. */
+  startFinaleMusic(onEnd?: () => void): void {
+    this.stopFinaleMusic();
+    this.stopChimeLoop();
+    this.stopAmbient();
+    if (!this.enabled) {
+      onEnd?.();
+      return;
+    }
+    const ctx = this.ensure();
+    // Largo theme — public-domain melody, original Web Audio arrangement.
+    const melody = [
+      392, 392, 392, 349, 311, 349, 294, 262, 294, 311, 349, 392, 440, 392, 349, 311,
+      294, 262, 247, 262, 294, 311, 349, 311, 294, 262, 247, 220, 247, 262, 294, 311,
+      349, 392, 440, 466, 440, 392, 349, 311, 294, 311, 349, 392, 440, 392, 349, 311,
+    ];
+    const dur = 1.05;
+    let i = 0;
+    const step = () => {
+      if (i >= melody.length) {
+        this.finaleTimer = window.setTimeout(() => {
+          this.finaleTimer = null;
+          onEnd?.();
+        }, 800);
+        return;
+      }
+      const freq = melody[i]!;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.value = freq;
+      g.gain.value = 0.0001;
+      g.gain.exponentialRampToValueAtTime(0.09, ctx.currentTime + 0.08);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur * 0.95);
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + dur);
+      this.finaleNodes.push(osc);
+      i += 1;
+      this.finaleTimer = window.setTimeout(step, dur * 1000);
+    };
+    step();
+  }
+
+  stopFinaleMusic(): void {
+    if (this.finaleTimer !== null) {
+      window.clearTimeout(this.finaleTimer);
+      this.finaleTimer = null;
+    }
+    for (const osc of this.finaleNodes) {
+      try {
+        osc.stop();
+        osc.disconnect();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.finaleNodes = [];
+  }
+
+  isFinalePlaying(): boolean {
+    return this.finaleTimer !== null || this.finaleNodes.length > 0;
   }
 }
