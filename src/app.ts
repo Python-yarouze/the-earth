@@ -16,7 +16,7 @@ import {
   tickUnlocks,
   type Progress,
 } from "./game/progress";
-import { decodeShare, encodeShare, shareableBodies } from "./game/share";
+import { buildShareUrl, decodeShareFromLocation, shareableBodies } from "./game/share";
 import { randomSandboxBodies } from "./game/randomize";
 import { parseSimSpeed, POV_SIM_SCALE, type SimSpeed } from "./game/speed";
 import { solarSystemBodies } from "./game/solarsystem";
@@ -130,9 +130,9 @@ export class Game {
     this.world = world;
     this.hud = hud;
     this.bind();
-    const shared = decodeShare(window.location.hash);
+    const shared = decodeShareFromLocation();
     if (shared) {
-      this.openWatch(shared);
+      this.loadSharedBuild(shared, "watch");
     } else {
       this.refreshHud();
     }
@@ -257,8 +257,8 @@ export class Game {
     this.refreshHud();
   }
 
-  private orbit(list: Body[] = this.build): void {
-    applyCircularOrbits(list, G);
+  private orbit(list: Body[] = this.build, preservePositions = false): void {
+    applyCircularOrbits(list, G, { preservePositions });
   }
 
   private persist(): void {
@@ -440,7 +440,7 @@ export class Game {
     this.world.clearShip();
     this.world.clearViews();
     this.world.setWatching(false);
-    this.world.controls.target.set(0, 0, 0);
+    this.world.resetCamera();
     this.ensurePick();
     this.show(this.build);
     this.refreshHud();
@@ -455,9 +455,11 @@ export class Game {
     }
   }
 
-  private startSim(watch = false): void {
+  private startSim(watch = false, skipOrbit = false): void {
     this.stopChimeLoop(false);
-    this.orbit();
+    if (!skipOrbit) {
+      this.orbit();
+    }
     this.live = cloneBodies(this.build);
     this.phase = watch ? "watch" : "simulate";
     this.stats = createStats();
@@ -486,16 +488,19 @@ export class Game {
 
   private resetBuild(): void {
     this.stopChimeLoop(false);
+    this.clearObserveFocus(false);
+    cancelCinema(this.cinema);
+    this.cinemaStarted = false;
     this.phase = "build";
     this.live = [];
     this.prevSnap.clear();
     this.stats = createStats();
     this.lastMood = this.stats.mood;
     this.sound.setAmbient(false);
-    cancelCinema(this.cinema);
     this.world.trails.reset();
     this.world.clearShip();
     this.world.setWatching(false);
+    this.world.resetCamera();
     this.show(this.build);
     this.refreshHud();
   }
@@ -566,17 +571,47 @@ export class Game {
     };
   }
 
-  private openWatch(bodies: Body[]): void {
+  private loadSharedBuild(bodies: Body[], mode: "watch" | "build"): void {
+    this.stopChimeLoop(false);
+    resetBodyIds();
     this.stage = sandboxStage();
     this.build = bodies;
-    this.orbit();
-    this.selectedId = this.build.find((b) => b.kind === "earth")?.id ?? null;
-    this.startSim(true);
+    this.orbit(this.build, true);
+    const earth = this.build.find((b) => b.kind === "earth");
+    this.earthStart = earth ? clone(earth.pos) : vec3(80, 0, 0);
+    this.selectedId = earth?.id ?? null;
+    this.usedSolarPreset = false;
+    this.copied = false;
+    this.tipsOpen = false;
+    this.shareUrl = null;
+    this.tipBlTimer = 0;
+    this.tipBlLines = [];
+    this.ensurePick();
+
+    if (mode === "watch") {
+      this.startSim(true, true);
+      return;
+    }
+
+    this.clearObserveFocus(false);
+    cancelCinema(this.cinema);
+    this.cinemaStarted = false;
+    this.live = [];
+    this.prevSnap.clear();
+    this.phase = "build";
+    this.stats = createStats();
+    this.lastMood = this.stats.mood;
+    this.world.trails.reset();
+    this.world.clearShip();
+    this.world.setWatching(false);
+    this.world.resetCamera();
+    this.show(this.build);
+    this.refreshHud();
   }
 
   private buildShareUrl(): string {
-    const hash = encodeShare(this.phase === "build" ? this.build : this.live);
-    return `${window.location.origin}${window.location.pathname}${hash}`;
+    const bodies = this.phase === "build" ? this.build : this.live;
+    return buildShareUrl(bodies, window.location.origin, window.location.pathname);
   }
 
   private openShare(): void {
@@ -677,14 +712,10 @@ export class Game {
       } else if (act === "reset") {
         this.resetBuild();
       } else if (act === "claim") {
-        this.enterStage(sandboxStage());
-        const shared = decodeShare(window.location.hash);
+        const shared = decodeShareFromLocation();
         if (shared) {
-          this.build = shared;
-          this.orbit();
-          this.selectedId = this.build.find((b) => b.kind === "earth")?.id ?? null;
-          this.show(this.build);
-          this.refreshHud();
+          this.loadSharedBuild(shared, "build");
+          this.sound.click();
         }
       } else if (act === "analysis") {
         this.analysis = !this.analysis;
@@ -723,6 +754,7 @@ export class Game {
         this.usedSolarPreset = false;
         this.selectedId = this.build.find((b) => b.kind === "earth")?.id ?? null;
         this.earthStart = clone(this.build.find((b) => b.kind === "earth")?.pos ?? vec3(80, 0, 0));
+        this.world.resetCamera();
         this.show(this.build);
         this.refreshHud();
         this.sound.click();
@@ -865,12 +897,15 @@ export class Game {
       }
     });
 
-    window.addEventListener("hashchange", () => {
-      const shared = decodeShare(window.location.hash);
+    const onShareNavigate = (): void => {
+      const shared = decodeShareFromLocation();
       if (shared) {
-        this.openWatch(shared);
+        this.loadSharedBuild(shared, "watch");
       }
-    });
+    };
+
+    window.addEventListener("hashchange", onShareNavigate);
+    window.addEventListener("popstate", onShareNavigate);
 
     window.addEventListener("resize", () => this.world.resize());
   }

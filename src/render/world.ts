@@ -9,6 +9,10 @@ import {
   createControls,
   createRenderer,
   createScene,
+  DEFAULT_CAMERA_EYE,
+  DEFAULT_CONTROLS_TARGET,
+  DEFAULT_MAX_DISTANCE,
+  DEFAULT_MIN_DISTANCE,
   intersectHorizontal,
   physicsToWorld,
 } from "./camera";
@@ -22,7 +26,10 @@ export class World {
   readonly camera: THREE.PerspectiveCamera;
   readonly controls: OrbitControls;
   readonly raycaster = new THREE.Raycaster();
-  readonly textures: BodyTextures;
+  private _textures: BodyTextures;
+  private envRT: THREE.WebGLRenderTarget | null = null;
+  private sharedMaps: Set<THREE.Texture>;
+  private lastBodies: readonly Body[] = [];
   private views = new Map<number, BodyView>();
   /** One PointLight per living sun — lit face always faces the actual sun. */
   private sunLights: THREE.PointLight[] = [];
@@ -57,18 +64,17 @@ export class World {
     textures: BodyTextures,
     skyTex: THREE.Texture,
   ) {
-    this.textures = textures;
+    this._textures = textures;
+    this.sharedMaps = new Set(
+      Object.values(textures).filter((t): t is THREE.Texture => t instanceof THREE.Texture),
+    );
+    this.sharedMaps.add(skyTex);
     this.renderer = createRenderer(canvas);
     this.scene = createScene();
     this.camera = createCamera();
     this.controls = createControls(this.camera, canvas);
     this.sky = addStarfield(this.scene, skyTex);
-    // Metal / mirror materials need an environment or they read as black.
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    const envRT = pmrem.fromEquirectangular(skyTex);
-    this.scene.environment = envRT.texture;
-    this.scene.environmentIntensity = 1.35;
-    pmrem.dispose();
+    this.applyEnvironment(skyTex);
     this.trails = new TrailField(this.scene);
     this.scene.add(this.arrows);
 
@@ -96,6 +102,69 @@ export class World {
     this.selectRing.rotation.x = -Math.PI / 2;
     this.selectRing.visible = false;
     this.scene.add(this.ambient, this.hemi, this.flash, this.selectRing);
+    this.bindContextRestore(canvas);
+  }
+
+  get textures(): BodyTextures {
+    return this._textures;
+  }
+
+  private applyEnvironment(skyTex: THREE.Texture): void {
+    if (this.envRT) {
+      this.envRT.dispose();
+      this.envRT = null;
+    }
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const envRT = pmrem.fromEquirectangular(skyTex);
+    pmrem.dispose();
+    this.envRT = envRT;
+    this.scene.environment = envRT.texture;
+    this.scene.environmentIntensity = 1.35;
+  }
+
+  private bindContextRestore(canvas: HTMLCanvasElement): void {
+    canvas.addEventListener("webglcontextlost", (e) => {
+      e.preventDefault();
+    });
+    canvas.addEventListener("webglcontextrestored", () => {
+      void this.reloadGraphics();
+    });
+  }
+
+  async reloadGraphics(): Promise<void> {
+    this._textures = await loadBodyTextures();
+    this.sharedMaps = new Set(
+      Object.values(this._textures).filter((t): t is THREE.Texture => t instanceof THREE.Texture),
+    );
+    const sky = await new Promise<THREE.Texture>((resolve, reject) => {
+      new THREE.TextureLoader().load("./env/milkyway.jpg", resolve, undefined, reject);
+    });
+    sky.colorSpace = THREE.SRGBColorSpace;
+    this.sharedMaps.add(sky);
+    const skyMat = this.sky.material;
+    if (skyMat instanceof THREE.MeshBasicMaterial) {
+      skyMat.map = sky;
+      skyMat.needsUpdate = true;
+    }
+    this.applyEnvironment(sky);
+    this.clearViews();
+    if (this.lastBodies.length > 0) {
+      this.syncBodies(this.lastBodies);
+    }
+  }
+
+  resetCamera(): void {
+    this.povFocus = null;
+    this.povFocusId = null;
+    this.trails.setVisible(true);
+    this.controls.enablePan = true;
+    this.controls.minDistance = DEFAULT_MIN_DISTANCE;
+    this.controls.maxDistance = DEFAULT_MAX_DISTANCE;
+    this.controls.autoRotate = false;
+    this.camera.position.copy(DEFAULT_CAMERA_EYE);
+    this.controls.target.copy(DEFAULT_CONTROLS_TARGET);
+    this.camera.lookAt(DEFAULT_CONTROLS_TARGET);
+    this.controls.update();
   }
 
   static async create(canvas: HTMLCanvasElement): Promise<World> {
@@ -125,11 +194,12 @@ export class World {
   }
 
   syncBodies(bodies: readonly Body[]): void {
+    this.lastBodies = bodies;
     const ids = new Set(bodies.map((b) => b.id));
     for (const [id, view] of this.views) {
       if (!ids.has(id)) {
         this.scene.remove(view.group);
-        view.dispose();
+        view.dispose(this.sharedMaps);
         this.views.delete(id);
       }
     }
@@ -137,12 +207,12 @@ export class World {
       let view = this.views.get(b.id);
       if (view && view.appearance !== b.appearance) {
         this.scene.remove(view.group);
-        view.dispose();
+        view.dispose(this.sharedMaps);
         this.views.delete(b.id);
         view = undefined;
       }
       if (!view) {
-        view = new BodyView(b, this.textures);
+        view = new BodyView(b, this._textures);
         this.views.set(b.id, view);
         this.scene.add(view.group);
       }
@@ -184,7 +254,7 @@ export class World {
   clearViews(): void {
     for (const view of this.views.values()) {
       this.scene.remove(view.group);
-      view.dispose();
+      view.dispose(this.sharedMaps);
     }
     this.views.clear();
   }
@@ -381,8 +451,8 @@ export class World {
     }
     this.camera.position.copy(this._eye);
     this.controls.target.copy(this._eye).addScaledVector(this._lookDir, 180);
-    this.controls.minDistance = 48;
-    this.controls.maxDistance = 720;
+    this.controls.minDistance = DEFAULT_MIN_DISTANCE;
+    this.controls.maxDistance = DEFAULT_MAX_DISTANCE;
     this.controls.update();
   }
 
@@ -391,8 +461,8 @@ export class World {
     this.povFocusId = null;
     this.trails.setVisible(true);
     this.controls.enablePan = true;
-    this.controls.minDistance = 40;
-    this.controls.maxDistance = 720;
+    this.controls.minDistance = DEFAULT_MIN_DISTANCE;
+    this.controls.maxDistance = DEFAULT_MAX_DISTANCE;
     this.controls.autoRotate = this.watching;
     const live = bodies.filter((b) => b.alive && !b.ephemeral);
     if (live.length > 0) {

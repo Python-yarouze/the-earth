@@ -102,8 +102,8 @@ export function shareableBodies(bodies: readonly Body[]): Body[] {
   return bodies.filter((b) => b.alive && !b.ephemeral && b.kind !== "meteor");
 }
 
-/** Hash fragment `#s=...` for GitHub Pages. Velocities are not stored. */
-export function encodeShare(bodies: readonly Body[]): string {
+/** Base64url payload for `?s=` (velocities are not stored). */
+export function encodeSharePayload(bodies: readonly Body[]): string {
   const rows = shareableBodies(bodies)
     .map((b) => {
       const code = FROM_ID[b.appearance];
@@ -113,21 +113,42 @@ export function encodeShare(bodies: readonly Body[]): string {
       return [code, round1(b.pos.x), round1(b.pos.y), round1(b.pos.z)];
     })
     .filter((row): row is [string, number, number, number] => row !== null);
-  return `#s=${toB64Url(JSON.stringify({ v: 1, b: rows }))}`;
+  return toB64Url(JSON.stringify({ v: 1, b: rows }));
 }
 
-export function decodeShare(hash: string): Body[] | null {
-  const raw = hash.startsWith("#") ? hash.slice(1) : hash;
-  if (!raw.startsWith("s=")) {
-    return null;
+/** @deprecated Use encodeSharePayload + buildShareUrl. Kept for tests decoding `#s=`. */
+export function encodeShare(bodies: readonly Body[]): string {
+  return `#s=${encodeSharePayload(bodies)}`;
+}
+
+export function buildShareUrl(bodies: readonly Body[], origin: string, pathname: string): string {
+  const payload = encodeSharePayload(bodies);
+  const base = `${origin}${pathname}`;
+  const join = base.includes("?") ? "&" : "?";
+  return `${base}${join}s=${payload}`;
+}
+
+/** Read `s` from query (preferred) or hash fragment (legacy). */
+export function readSharePayload(loc: Pick<Location, "search" | "hash"> = window.location): string | null {
+  const fromQuery = new URLSearchParams(loc.search).get("s");
+  if (fromQuery) {
+    return fromQuery;
   }
+  const hash = loc.hash.startsWith("#") ? loc.hash.slice(1) : loc.hash;
+  if (hash.startsWith("s=")) {
+    return hash.slice(2);
+  }
+  return null;
+}
+
+export function decodeSharePayload(payload: string): Body[] | null {
   try {
-    const payload = JSON.parse(fromB64Url(raw.slice(2))) as { v?: number; b?: unknown };
-    if (payload.v !== 1 || !Array.isArray(payload.b)) {
+    const parsed = JSON.parse(fromB64Url(payload)) as { v?: number; b?: unknown };
+    if (parsed.v !== 1 || !Array.isArray(parsed.b)) {
       return null;
     }
     const bodies: Body[] = [];
-    for (const row of payload.b) {
+    for (const row of parsed.b) {
       if (!Array.isArray(row) || row.length < 4) {
         continue;
       }
@@ -151,4 +172,25 @@ export function decodeShare(hash: string): Body[] | null {
   } catch {
     return null;
   }
+}
+
+/** Decode from `#s=...`, `s=...`, raw payload, or current location. */
+export function decodeShare(source?: string | null): Body[] | null {
+  if (source === undefined) {
+    const payload = readSharePayload();
+    return payload ? decodeSharePayload(payload) : null;
+  }
+  if (source === null) {
+    return null;
+  }
+  const raw = source.startsWith("#") ? source.slice(1) : source;
+  if (raw.startsWith("s=")) {
+    return decodeSharePayload(raw.slice(2));
+  }
+  return decodeSharePayload(raw);
+}
+
+export function decodeShareFromLocation(loc: Pick<Location, "search" | "hash"> = window.location): Body[] | null {
+  const payload = readSharePayload(loc);
+  return payload ? decodeSharePayload(payload) : null;
 }

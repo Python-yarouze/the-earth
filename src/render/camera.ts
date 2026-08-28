@@ -24,6 +24,11 @@ export function createScene(): THREE.Scene {
   return scene;
 }
 
+export const DEFAULT_CAMERA_EYE = new THREE.Vector3(72, 88, 168);
+export const DEFAULT_CONTROLS_TARGET = new THREE.Vector3(0, 0, 0);
+export const DEFAULT_MIN_DISTANCE = 40;
+export const DEFAULT_MAX_DISTANCE = 720;
+
 export function createCamera(): THREE.PerspectiveCamera {
   const camera = new THREE.PerspectiveCamera(
     42,
@@ -31,8 +36,8 @@ export function createCamera(): THREE.PerspectiveCamera {
     0.5,
     4000,
   );
-  camera.position.set(72, 88, 168);
-  camera.lookAt(0, 0, 0);
+  camera.position.copy(DEFAULT_CAMERA_EYE);
+  camera.lookAt(DEFAULT_CONTROLS_TARGET);
   return camera;
 }
 
@@ -44,11 +49,11 @@ export function createControls(
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.enablePan = true;
-  controls.minDistance = 40;
-  controls.maxDistance = 720;
+  controls.minDistance = DEFAULT_MIN_DISTANCE;
+  controls.maxDistance = DEFAULT_MAX_DISTANCE;
   controls.maxPolarAngle = Math.PI - 0.08;
   controls.minPolarAngle = 0.06;
-  controls.target.set(0, 0, 0);
+  controls.target.copy(DEFAULT_CONTROLS_TARGET);
   return controls;
 }
 

@@ -358,7 +358,7 @@ export function reseatMoon(earth: Body, moon: Body, sun: Body | undefined): void
   moon.alive = true;
 }
 
-function applyMoonOrbits(bodies: Body[], sun: Body, g: number): void {
+function applyMoonOrbits(bodies: Body[], sun: Body, g: number, preservePositions = false): void {
   const earth = bodies.find((b) => b.alive && b.kind === "earth");
   if (!earth) {
     return;
@@ -369,16 +369,19 @@ function applyMoonOrbits(bodies: Body[], sun: Body, g: number): void {
     }
     const rVec0 = sub(moon.pos, earth.pos);
     let r = length(rVec0);
-    const minR = earth.radius + moon.radius + 0.8;
-    const sunDir = sub(earth.pos, sun.pos);
-    const aligned =
-      length(sunDir) > 1e-6 && Math.abs(dot(normalize(rVec0), normalize(sunDir))) > 0.72;
-    if (r < minR || aligned) {
-      const along = orbitalTangent(length(sunDir) > 1e-6 ? sunDir : earth.pos);
-      r = Math.max(r, MOON_ORBIT_R);
-      moon.pos = add(earth.pos, scale(along, r));
+    if (!preservePositions) {
+      const minR = earth.radius + moon.radius + 0.8;
+      const sunDir = sub(earth.pos, sun.pos);
+      const aligned =
+        length(sunDir) > 1e-6 && Math.abs(dot(normalize(rVec0), normalize(sunDir))) > 0.72;
+      if (r < minR || aligned) {
+        const along = orbitalTangent(length(sunDir) > 1e-6 ? sunDir : earth.pos);
+        r = Math.max(r, MOON_ORBIT_R);
+        moon.pos = add(earth.pos, scale(along, r));
+      }
     }
     const rVec = sub(moon.pos, earth.pos);
+    r = length(rVec);
     const vRel = circularSpeed(earth.mass, moon.mass, r, g);
     // Retrograde around Earth — was the smoother look before forced reseating.
     const t = scale(orbitalTangent(rVec), -1);
@@ -387,8 +390,13 @@ function applyMoonOrbits(bodies: Body[], sun: Body, g: number): void {
   }
 }
 
+export type CircularOrbitOptions = {
+  preservePositions?: boolean;
+};
+
 /** Keplerian circular velocity around the sun (or heaviest body). Moons near Earth orbit Earth. */
-export function applyCircularOrbits(bodies: Body[], g = G): void {
+export function applyCircularOrbits(bodies: Body[], g = G, options: CircularOrbitOptions = {}): void {
+  const preservePositions = options.preservePositions ?? false;
   const sun = primaryBody(bodies);
   if (!sun) {
     return;
@@ -416,5 +424,5 @@ export function applyCircularOrbits(bodies: Body[], g = G): void {
   sun.vel.x = -px / sun.mass;
   sun.vel.y = -py / sun.mass;
   sun.vel.z = -pz / sun.mass;
-  applyMoonOrbits(bodies, sun, g);
+  applyMoonOrbits(bodies, sun, g, preservePositions);
 }

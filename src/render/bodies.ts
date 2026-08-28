@@ -480,19 +480,32 @@ export class BodyView {
     }
   }
 
-  dispose(): void {
+  dispose(sharedMaps: ReadonlySet<THREE.Texture>): void {
     this.group.traverse((obj) => {
-      if (obj instanceof THREE.Mesh || obj instanceof THREE.Sprite || obj instanceof THREE.Line) {
-        if ("geometry" in obj) {
-          obj.geometry.dispose();
+      if (!(obj instanceof THREE.Mesh || obj instanceof THREE.Sprite || obj instanceof THREE.Line)) {
+        return;
+      }
+      if ("geometry" in obj && obj.geometry) {
+        obj.geometry.dispose();
+      }
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const mat of mats) {
+        if (!mat) {
+          continue;
         }
-        const m = obj.material;
-        if (Array.isArray(m)) {
-          m.forEach((x) => x.dispose());
-        } else {
-          m.dispose();
-        }
+        detachAndDisposeMaterial(mat, sharedMaps);
       }
     });
   }
+}
+
+function detachAndDisposeMaterial(mat: THREE.Material, sharedMaps: ReadonlySet<THREE.Texture>): void {
+  const withMap = mat as THREE.MeshStandardMaterial & { map?: THREE.Texture | null };
+  if (withMap.map) {
+    if (!sharedMaps.has(withMap.map)) {
+      withMap.map.dispose();
+    }
+    withMap.map = null;
+  }
+  mat.dispose();
 }
