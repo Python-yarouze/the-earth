@@ -1,6 +1,8 @@
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { PerspectiveCamera } from "three";
 import type { Body } from "../physics/body";
+import type { FinaleState } from "../game/finale";
+import { visualRadius } from "./bodies";
 import { physicsToWorld } from "./camera";
 
 export interface CinemaState {
@@ -94,3 +96,32 @@ export function tickCinema(
   }
   return state.active;
 }
+
+/** Frame the sun, planets, and incoming destroyer along the approach axis. */
+export function setupFinaleCamera(
+  state: FinaleState,
+  camera: PerspectiveCamera,
+  controls: OrbitControls,
+  bodies: readonly Body[] = [],
+): void {
+  const sunW = physicsToWorld(state.sunAnchor);
+  const dir = state.approachDir;
+  let maxR = 140;
+  for (const body of bodies) {
+    if (!body.alive || body.ephemeral) {
+      continue;
+    }
+    const w = physicsToWorld(body.pos);
+    const span = Math.hypot(w.x - sunW.x, w.y - sunW.y, w.z - sunW.z) + visualRadius(body);
+    maxR = Math.max(maxR, span);
+  }
+  const dist = Math.min(920, Math.max(300, maxR * 2.35));
+  const camX = sunW.x - dir.x * dist;
+  const camY = sunW.y + Math.max(52, state.cameraHeight * (maxR / 180));
+  const camZ = sunW.z - dir.z * dist;
+  camera.position.set(camX, camY, camZ);
+  controls.target.set(sunW.x, sunW.y, sunW.z);
+  camera.lookAt(sunW.x, sunW.y, sunW.z);
+  controls.update();
+}
+

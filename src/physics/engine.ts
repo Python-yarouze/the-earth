@@ -43,7 +43,11 @@ function pairScale(
   return PLANET_PAIR_FACTOR;
 }
 
-export function accelerations(bodies: readonly Body[], g = G): Vec3[] {
+export function accelerations(
+  bodies: readonly Body[],
+  g = G,
+  opts?: { skipEphemeral?: boolean },
+): Vec3[] {
   const n = bodies.length;
   const acc = Array.from({ length: n }, () => vec3());
   const earth = bodies.find((b) => b.alive && b.kind === "earth");
@@ -56,6 +60,9 @@ export function accelerations(bodies: readonly Body[], g = G): Vec3[] {
     for (let j = i + 1; j < n; j++) {
       const b = bodies[j];
       if (!b.alive || b.mass <= 0) {
+        continue;
+      }
+      if (opts?.skipEphemeral && (a.ephemeral || b.ephemeral)) {
         continue;
       }
       const pair = pairScale(a, b, earth, sun);
@@ -187,6 +194,52 @@ export function step(bodies: Body[], dt = DT, g = G): void {
   const sub = dt / n;
   for (let i = 0; i < n; i++) {
     applyVerlet(bodies, sub, g);
+  }
+}
+
+/** Finale step: debris flies ballistically (no gravity) while planets keep orbiting. */
+function applyVerletFinale(bodies: Body[], dt: number, g: number): void {
+  const a0 = accelerations(bodies, g, { skipEphemeral: true });
+  for (let i = 0; i < bodies.length; i++) {
+    const b = bodies[i];
+    if (!b.alive) {
+      continue;
+    }
+    if (b.ephemeral) {
+      b.pos.x += b.vel.x * dt;
+      b.pos.y += b.vel.y * dt;
+      b.pos.z += b.vel.z * dt;
+      b.spin += dt * b.spinRate;
+      continue;
+    }
+    b.vel.x += a0[i].x * dt * 0.5;
+    b.vel.y += a0[i].y * dt * 0.5;
+    b.vel.z += a0[i].z * dt * 0.5;
+    b.pos.x += b.vel.x * dt;
+    b.pos.y += b.vel.y * dt;
+    b.pos.z += b.vel.z * dt;
+    if (b.appearance !== "moon") {
+      b.spin += dt * b.spinRate;
+    }
+  }
+  syncMoonSpin(bodies, dt);
+  const a1 = accelerations(bodies, g, { skipEphemeral: true });
+  for (let i = 0; i < bodies.length; i++) {
+    const b = bodies[i];
+    if (!b.alive || b.ephemeral) {
+      continue;
+    }
+    b.vel.x += a1[i].x * dt * 0.5;
+    b.vel.y += a1[i].y * dt * 0.5;
+    b.vel.z += a1[i].z * dt * 0.5;
+  }
+}
+
+export function stepFinale(bodies: Body[], dt = DT, g = G): void {
+  const n = needsSubsteps(bodies);
+  const sub = dt / n;
+  for (let i = 0; i < n; i++) {
+    applyVerletFinale(bodies, sub, g);
   }
 }
 

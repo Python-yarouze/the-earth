@@ -145,3 +145,23 @@ export function evaluateFrame(
   }
   return next;
 }
+
+/** Keep the year clock running during the finale after the sun is gone. */
+export function tickFinaleYears(stats: EarthStats, dt: number, rateRadPerSec: number): EarthStats {
+  let orbitAccum = stats.orbitAccum + rateRadPerSec * dt;
+  let years = stats.years;
+  while (orbitAccum >= TWO_PI) {
+    orbitAccum -= TWO_PI;
+    years += 1;
+  }
+  while (orbitAccum <= -TWO_PI) {
+    orbitAccum += TWO_PI;
+    years += 1;
+  }
+  return {
+    ...stats,
+    timeSec: stats.timeSec + dt,
+    years,
+    orbitAccum,
+  };
+}

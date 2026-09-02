@@ -48,7 +48,9 @@ export function randomSandboxBodies(
   }
 
   const sun = makeCatalogBody("sun", vec3(0, 0, 0));
+  sun.core = true;
   const earth = makeCatalogBody("earth", vec3(80, 0, 0));
+  earth.core = true;
   const bodies: Body[] = [sun, earth];
   for (const id of picked) {
     bodies.push(makeCatalogBody(id, scatterPos(bodies, rng)));

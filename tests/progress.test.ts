@@ -1,11 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { REAL_PLACEABLE_IDS } from "../src/game/catalog";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { REAL_PLACEABLE_IDS, UNLOCKABLE_IDS } from "../src/game/catalog";
+import { DISCOVERIES } from "../src/game/discoveries";
 import {
   CHIME_LOOP_THRESHOLD,
   EXTRA_DEFS,
   SUN_LONG_STABLES,
   SUN_WATCH_SEC,
   TWELVE_BODY_THRESHOLD,
+  clearProgress,
   defaultProgress,
   extraHint,
   extraLabel,
@@ -13,7 +15,10 @@ import {
   hasChimeLoop,
   hasDuplicateAppearance,
   hasSolarComplete,
+  loadProgress,
+  saveProgress,
   tickUnlocks,
+  unlockAllProgress,
   type PostSolarBaselines,
 } from "../src/game/progress";
 
@@ -255,5 +260,55 @@ describe("unlocks", () => {
     expect(extraLabel("solarsystem")).toContain("太陽系");
     expect(extraHint("chime").length).toBeGreaterThan(0);
     expect(extraLabel("chimeLoop")).toBe("ながす");
+  });
+});
+
+describe("debug progress helpers", () => {
+  const KEY = "the-earth-unlocks";
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("unlockAllProgress opens every catalog entry, extra, and discovery", () => {
+    const all = unlockAllProgress();
+    for (const id of UNLOCKABLE_IDS) {
+      expect(all.unlocked).toContain(id);
+    }
+    for (const extra of EXTRA_DEFS) {
+      expect(all.extras).toContain(extra.id);
+    }
+    for (const d of DISCOVERIES) {
+      expect(all.discoveries).toContain(d.id);
+    }
+    expect(all.destroyerSeen).toBe(true);
+    expect(all.hasPlayed).toBe(true);
+    expect(hasChime(all)).toBe(true);
+    expect(hasChimeLoop(all)).toBe(true);
+  });
+
+  it("clearProgress resets saved data to defaults on load", () => {
+    const store: Record<string, string> = {};
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store[k] ?? null,
+      setItem: (k: string, v: string) => {
+        store[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete store[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(store)) {
+          delete store[k];
+        }
+      },
+    });
+
+    saveProgress(unlockAllProgress());
+    expect(loadProgress().unlocked.length).toBeGreaterThan(1);
+    clearProgress();
+    const loaded = loadProgress();
+    expect(loaded).toEqual(defaultProgress());
+    expect(store[KEY]).toBeUndefined();
   });
 });

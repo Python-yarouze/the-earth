@@ -73,7 +73,9 @@ export function sandboxStage(): StageDef {
 
 export function initialBodies(_stage: StageDef): Body[] {
   const sun = makeCatalogBody("sun", vec3(0, 0, 0));
+  sun.core = true;
   const earth = makeCatalogBody("earth", vec3(80, 0, 0));
+  earth.core = true;
   const bodies = [sun, earth];
   applyCircularOrbits(bodies);
   return bodies;
@@ -85,6 +87,13 @@ export function makePlanet(appearance: AppearanceId, pos: { x: number; y: number
 
 export function planetCount(bodies: readonly Body[]): number {
   return bodies.filter((b) => b.alive && b.kind === "planet" && !b.ephemeral).length;
+}
+
+export function canRemoveBody(body: Body): boolean {
+  if (!body.alive || body.ephemeral || body.core) {
+    return false;
+  }
+  return body.kind === "planet" || body.kind === "sun";
 }
 
 export function canMoveBody(stage: StageDef, body: Body): boolean {

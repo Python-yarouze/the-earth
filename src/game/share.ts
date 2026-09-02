@@ -168,6 +168,18 @@ export function decodeSharePayload(payload: string): Body[] | null {
     if (!bodies.some((b) => b.kind === "sun") || !bodies.some((b) => b.kind === "earth")) {
       return null;
     }
+    let coreSun = false;
+    let coreEarth = false;
+    for (const body of bodies) {
+      if (body.kind === "sun" && !coreSun) {
+        body.core = true;
+        coreSun = true;
+      }
+      if (body.kind === "earth" && !coreEarth) {
+        body.core = true;
+        coreEarth = true;
+      }
+    }
     return bodies;
   } catch {
     return null;

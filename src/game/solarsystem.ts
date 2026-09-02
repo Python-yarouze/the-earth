@@ -104,10 +104,14 @@ function applySolarPresetOrbits(bodies: Body[]): void {
 
 export function solarSystemBodies(): Body[] {
   const sun = makeCatalogBody("sun", vec3(0, 0, 0));
+  sun.core = true;
   const planets = SOLAR_ORBITS.map((o) =>
     makeCatalogBody(o.id, eclipticPosition(o.r, o.angle, o.incl, o.node)),
   );
   const earth = planets.find((b) => b.kind === "earth");
+  if (earth) {
+    earth.core = true;
+  }
   const bodies = [sun, ...planets];
   if (earth) {
     const n = eclipticNormal(MOON_INCL_DEG, MOON_NODE_DEG);

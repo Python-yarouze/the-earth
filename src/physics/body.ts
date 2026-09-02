@@ -65,6 +65,8 @@ export interface Body {
    * bodies (sun/blackhole still pull fully). Used by the solar preset.
    */
   peerGravity: boolean;
+  /** Starting sun/earth — cannot be removed in build mode. */
+  core?: boolean;
 }
 
 let nextId = 1;

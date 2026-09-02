@@ -23,7 +23,18 @@ import { formatSpeed, SIM_SPEEDS, type SimSpeed } from "../game/speed";
 import type { StageDef } from "../game/stages";
 import type { Phase } from "../game/state";
 import type { AppearanceId, Body } from "../physics/body";
-import { CREDITS_LINES } from "../game/finale";
+import {
+  CREDITS_BUTTON_OPACITY,
+  CREDIT_SECTIONS,
+  CREDITS_SCROLL_SEC,
+  creditsScrollDurationSec,
+  creditsScrollEndPct,
+  FINALE_THANKS_TEXT,
+  FINALE_EPILOGUE_LINES,
+  finaleCreditsPhase,
+  finaleEpilogueFrame,
+  type CreditSection,
+} from "../game/finale";
 
 export function splitTipLines(text: string, copied = false): string[] {
   const lines = text
@@ -56,13 +67,29 @@ export function simTipText(mood: Mood): string {
   return "地球が太陽を1周すると1年。惑星をクリックすると、そこから周りを見る。";
 }
 
-function creditsPanel(progress: number): string {
-  const lines = CREDITS_LINES.map((line) => `<p>${line}</p>`).join("");
-  const offset = Math.round(progress * 120);
-  const done = progress >= 1;
-  return `<div class="credits-roll" aria-live="polite">
-    <div class="credits-scroll" style="transform: translateY(${offset}%)">${lines}</div>
-    ${done ? `<button class="cta credits-end" data-act="finale-end">やり直す</button>` : ""}
+function renderCreditSection(section: CreditSection): string {
+  if (section.variant === "title") {
+    return `<div class="credits-block credits-block-title">${section.lines
+      .map((line) => `<p class="credits-title">${line}</p>`)
+      .join("")}</div>`;
+  }
+  const label = section.label ? `<p class="credits-label">${section.label}</p>` : "";
+  const lines = section.lines.map((line) => `<p class="credits-line">${line}</p>`).join("");
+  return `<div class="credits-block">${label}${lines}</div>`;
+}
+
+function creditsPanel(showSkip: boolean): string {
+  const blocks = CREDIT_SECTIONS.map(renderCreditSection).join("");
+  const skip = showSkip
+    ? `<button type="button" class="credits-skip" data-act="finale-skip" aria-label="エンドクレジットをスキップ">スキップ</button>`
+    : "";
+  return `${skip}<div class="credits-roll" aria-live="polite" style="--credits-btn-opacity: ${CREDITS_BUTTON_OPACITY}">
+    <div class="credits-scroll rolling">${blocks}</div>
+    <div class="credits-epilogue" aria-live="polite" aria-hidden="true">
+      <p class="credits-epilogue-line"></p>
+    </div>
+    <p class="credits-thanks">${FINALE_THANKS_TEXT}</p>
+    <button type="button" class="cta credits-end" data-act="finale-end">やり直す</button>
   </div>`;
 }
 
@@ -77,6 +104,40 @@ function tipCaptionBl(lines: string[]): string {
 
 function tipsButton(): string {
   return `<button type="button" class="tips-btn" data-act="tips" aria-label="遊び方" title="遊び方">!</button>`;
+}
+
+export type HudEdge = "top" | "bottom" | "left";
+
+export type HudEdges = Record<HudEdge, boolean>;
+
+const EDGE_TAB_MARK: Record<HudEdge, { closed: string; open: string }> = {
+  top: { closed: "▾", open: "▴" },
+  bottom: { closed: "▴", open: "▾" },
+  left: { closed: "›", open: "‹" },
+};
+
+export function edgeTabMark(edge: HudEdge, open: boolean): string {
+  return open ? EDGE_TAB_MARK[edge].open : EDGE_TAB_MARK[edge].closed;
+}
+
+function edgeShell(
+  edge: HudEdge,
+  label: string,
+  open: boolean,
+  inner: string,
+  tag: "aside" | "div" = "div",
+  attrs = "",
+): string {
+  const mark = edgeTabMark(edge, open);
+  const tab = `<button type="button" class="edge-tab edge-tab-${edge}" data-act="hud-edge" data-edge="${edge}" aria-expanded="${open}" aria-label="${label}" title="${label}">${mark}</button>`;
+  const panel = `<div class="edge-panel">${inner}</div>`;
+  const drawer = edge === "bottom" ? `${tab}${panel}` : `${panel}${tab}`;
+  const openClass = open ? " edge-open" : "";
+  const shell = `<div class="edge-drawer">${drawer}</div>`;
+  if (tag === "aside") {
+    return `<aside class="edge edge-${edge}${openClass}" ${attrs}>${shell}</aside>`;
+  }
+  return `<div class="edge edge-${edge}${openClass}" ${attrs}>${shell}</div>`;
 }
 
 function tipsPanel(): string {
@@ -100,7 +161,7 @@ function tipsPanel(): string {
             <li>惑星をドラッグで距離、Shift＋ドラッグで高さ。</li>
             <li>空をドラッグでカメラを動かす。</li>
             <li>月は地球の近くに置くと衛星になる。</li>
-            <li>いらない惑星は Delete で消せる。</li>
+            <li>いらない惑星や追加した太陽は Delete で消せる。</li>
           </ul>
         </section>
         <section>
@@ -243,6 +304,34 @@ export class Hud {
     });
   }
 
+  updatePlanetPick(id: AppearanceId): void {
+    for (const el of this.root.querySelectorAll<HTMLElement>(".planet-item[data-id]")) {
+      const on = el.dataset.id === id;
+      el.classList.toggle("on", on);
+      el.setAttribute("aria-pressed", String(on));
+    }
+    const sel = this.root.querySelector(".sel-line");
+    if (sel) {
+      sel.textContent = `選択中 · ${catalogLabel(id)}`;
+    }
+  }
+
+  /** Toggle edge panels without re-rendering — keeps CSS slide transitions alive. */
+  syncHudEdges(edges: HudEdges): void {
+    for (const edge of ["top", "bottom", "left"] as const) {
+      const shell = this.root.querySelector(`.edge-${edge}`);
+      if (!shell) {
+        continue;
+      }
+      shell.classList.toggle("edge-open", edges[edge]);
+      const tab = shell.querySelector<HTMLButtonElement>(".edge-tab");
+      if (tab) {
+        tab.setAttribute("aria-expanded", String(edges[edge]));
+        tab.textContent = edgeTabMark(edge, edges[edge]);
+      }
+    }
+  }
+
   render(opts: {
     phase: Phase;
     stage: StageDef | null;
@@ -257,7 +346,9 @@ export class Hud {
     shareUrl: string | null;
     simSpeed: SimSpeed;
     chimeLoop: boolean;
-    finaleProgress?: number | null;
+    hudEdges?: HudEdges;
+    debugResetPrompt?: boolean;
+    finaleReplay?: boolean;
   }): void {
     const {
       phase,
@@ -273,10 +364,21 @@ export class Hud {
       shareUrl,
       simSpeed,
       chimeLoop,
-      finaleProgress = null,
+      hudEdges = { top: false, bottom: false, left: false },
+      debugResetPrompt = false,
+      finaleReplay = false,
     } = opts;
 
     if (phase === "title") {
+      const resetUi = debugResetPrompt
+        ? `<div class="title-debug-confirm">
+            <p>すべての解放と記録が消えます。</p>
+            <div class="title-debug-actions">
+              <button type="button" class="ghost" data-act="debug-reset-cancel">やめる</button>
+              <button type="button" class="cta danger" data-act="debug-reset-confirm">初期化する</button>
+            </div>
+          </div>`
+        : `<button type="button" class="ghost title-debug-reset" data-act="debug-reset-prompt">進行を初期化</button>`;
       this.root.innerHTML = `
         <section class="overlay center">
           <p class="kicker">軌道の実験</p>
@@ -287,6 +389,7 @@ export class Hud {
               ? `<button class="cta" data-act="continue">つづける</button>`
               : `<button class="cta" data-act="enter">はじめる</button>`
           }
+          <footer class="title-debug">${resetUi}</footer>
         </section>`;
       return;
     }
@@ -322,6 +425,12 @@ export class Hud {
           icon: d.id,
         }),
       ).join("");
+      const finaleReplay = progress.destroyerSeen
+        ? `<h2>エンドクレジット</h2>
+          <div class="unlock-actions">
+            <button type="button" class="cta" data-act="finale-replay">エンドクレジットを見る</button>
+          </div>`
+        : "";
       this.root.innerHTML = `
         <section class="overlay stages unlocks">
           <header class="topbar">
@@ -337,6 +446,7 @@ export class Hud {
           <div class="stage-grid unlock-grid">${extras}</div>
           <h2>見つけたこと</h2>
           <div class="stage-grid unlock-grid">${finds}</div>
+          ${finaleReplay}
         </section>`;
       return;
     }
@@ -353,7 +463,7 @@ export class Hud {
           .filter((a) => isUnlocked(progress, a))
           .map((a) => {
             const name = catalogLabel(a);
-            return `<button class="planet-item ${a === pickAppearance ? "on" : ""}" data-act="appear" data-id="${a}" title="${name}" aria-label="${name}" aria-pressed="${a === pickAppearance}">
+            return `<button type="button" class="planet-item ${a === pickAppearance ? "on" : ""}" data-id="${a}" title="${name}" aria-label="${name}" aria-pressed="${a === pickAppearance}">
               <i class="swatch ${a}"></i>
               <span class="planet-name">${name}</span>
             </button>`;
@@ -369,27 +479,46 @@ export class Hud {
     const tipsUi = `${tipsButton()}${tipsOpen ? tipsPanel() : ""}`;
     const shareUi = shareUrl ? sharePanel(shareUrl) : "";
 
-    const leftDock =
-      stage?.allowPlanets && planetItems
-        ? `<aside class="edge edge-left" aria-label="置く惑星">
-            <div class="edge-panel">
-              <div class="planet-dock" role="toolbar">
-                ${planetItems}
-              </div>
-              <div class="planet-dock-actions">
-                ${
-                  stage.sandbox && hasSolarPreset(progress)
-                    ? `<button class="ghost" data-act="solar">太陽系</button>
-                      <button class="ghost" data-act="random">ランダム</button>`
-                    : ""
-                }
-                <button class="ghost" data-act="clear">リセット</button>
-              </div>
+    if (phase === "build") {
+      const topInner = `
+        <header class="topbar">
+          <p class="kicker">THE EARTH · ${stage?.title ?? ""}</p>
+          <div class="top-actions">
+            ${count}
+            <button class="ghost" data-act="unlocks">図鑑</button>
+          </div>
+        </header>
+        <p class="prompt">${stage?.prompt ?? ""}</p>
+        ${selected ? `<p class="sel-line">選択中 · ${selectedName}</p>` : ""}
+      `;
+      const planetDockInner =
+        stage?.allowPlanets && planetItems
+          ? `<div class="planet-dock" role="toolbar">
+              ${planetItems}
             </div>
-          </aside>`
+            <div class="planet-dock-actions">
+              ${
+                stage.sandbox && hasSolarPreset(progress)
+                  ? `<button class="ghost" data-act="solar">太陽系</button>
+                    <button class="ghost" data-act="random">ランダム</button>`
+                  : ""
+              }
+              <button class="ghost" data-act="clear">リセット</button>
+            </div>`
+          : "";
+      const bottomInner = `
+        <div class="row bar-actions">
+          ${chimeButtons(progress, chimeLoop)}
+          <button class="ghost" data-act="share">共有</button>
+          <button class="cta" data-act="start">START</button>
+        </div>
+      `;
+      const leftDock = planetDockInner
+        ? edgeShell("left", "惑星", hudEdges.left, planetDockInner, "aside", 'aria-label="置く惑星"')
         : "";
 
-    if (phase === "build") {
+      const dockScroll = this.root.querySelector<HTMLElement>(".planet-dock")?.scrollTop ?? 0;
+
       this.root.innerHTML = `
         <div class="hud edge-hud">
           ${leftDock}
@@ -397,37 +526,21 @@ export class Hud {
           ${tipBlCaption}
           ${tipsUi}
           ${shareUi}
-          <div class="edge edge-top">
-            <div class="edge-panel">
-              <header class="topbar">
-                <p class="kicker">THE EARTH · ${stage?.title ?? ""}</p>
-                <div class="top-actions">
-                  ${count}
-                  <button class="ghost" data-act="unlocks">図鑑</button>
-                </div>
-              </header>
-              <p class="prompt">${stage?.prompt ?? ""}</p>
-              ${selected ? `<p class="sel-line">選択中 · ${selectedName}</p>` : ""}
-            </div>
-          </div>
-          <div class="edge edge-bottom">
-            <div class="edge-panel">
-              <div class="row bar-actions">
-                ${chimeButtons(progress, chimeLoop)}
-                <button class="ghost" data-act="share">共有</button>
-                <button class="cta" data-act="start">START</button>
-              </div>
-            </div>
-          </div>
+          ${edgeShell("top", "情報", hudEdges.top, topInner)}
+          ${edgeShell("bottom", "操作", hudEdges.bottom, bottomInner)}
         </div>`;
+
+      const dock = this.root.querySelector<HTMLElement>(".planet-dock");
+      if (dock) {
+        dock.scrollTop = dockScroll;
+      }
       return;
     }
 
     if (phase === "finale") {
-      const prog = finaleProgress ?? 0;
       this.root.innerHTML = `
         <div class="hud edge-hud slim finale-hud">
-          ${creditsPanel(prog)}
+          ${creditsPanel(finaleReplay)}
           <span class="hud-year" data-time>${formatYearClock(stats)}</span>
         </div>`;
       return;
@@ -439,38 +552,36 @@ export class Hud {
       const focusLine = selected
         ? `<p class="sel-line">${selectedName}から見る</p>`
         : "";
+      const topInner = `
+        <header class="topbar">
+          <p class="kicker">${moodLine(mood)}</p>
+          <div class="top-actions">
+            ${speedControls(simSpeed)}
+          </div>
+        </header>
+        ${focusLine}
+      `;
+      const bottomInner = `
+        <div class="row bar-actions">
+          ${chimeButtons(progress, chimeLoop)}
+          <button class="ghost ${analysis ? "on" : ""}" data-act="analysis">分析</button>
+          ${selected ? `<button class="ghost on" data-act="focus-all">全体視点</button>` : ""}
+          <button class="ghost" data-act="share">共有</button>
+          ${
+            watch
+              ? `<button class="cta" data-act="claim">自分でも組む</button>`
+              : `<button class="${mood === "collapsed" ? "cta" : "ghost"}" data-act="reset">やり直す</button>`
+          }
+        </div>
+      `;
       this.root.innerHTML = `
         <div class="hud edge-hud slim">
           ${noticeCaption}
           ${tipBlCaption}
           ${shareUi}
           <span class="hud-year" data-time>${formatYearClock(stats)}</span>
-          <div class="edge edge-top">
-            <div class="edge-panel">
-              <header class="topbar">
-                <p class="kicker">${moodLine(mood)}</p>
-                <div class="top-actions">
-                  ${speedControls(simSpeed)}
-                </div>
-              </header>
-              ${focusLine}
-            </div>
-          </div>
-          <div class="edge edge-bottom">
-            <div class="edge-panel">
-              <div class="row bar-actions">
-                ${chimeButtons(progress, chimeLoop)}
-                <button class="ghost ${analysis ? "on" : ""}" data-act="analysis">分析</button>
-                ${selected ? `<button class="ghost on" data-act="focus-all">全体視点</button>` : ""}
-                <button class="ghost" data-act="share">共有</button>
-                ${
-                  watch
-                    ? `<button class="cta" data-act="claim">自分でも組む</button>`
-                    : `<button class="${mood === "collapsed" ? "cta" : "ghost"}" data-act="reset">やり直す</button>`
-                }
-              </div>
-            </div>
-          </div>
+          ${edgeShell("top", "情報", hudEdges.top, topInner)}
+          ${edgeShell("bottom", "操作", hudEdges.bottom, bottomInner)}
         </div>`;
     }
   }
@@ -479,6 +590,53 @@ export class Hud {
     const el = this.root.querySelector("[data-time]");
     if (el) {
       el.textContent = formatYearClock(stats);
+    }
+  }
+
+  /** Measure credits height, scroll fully off-screen, then phase into thank-you. */
+  layoutFinaleCredits(roll: HTMLElement): number {
+    const scroll = roll.querySelector<HTMLElement>(".credits-scroll");
+    if (!scroll) {
+      return CREDITS_SCROLL_SEC;
+    }
+    if (scroll.dataset.laidOut !== "1") {
+      const h = scroll.offsetHeight;
+      const vh = window.innerHeight;
+      const endY = creditsScrollEndPct(h, vh);
+      const duration = creditsScrollDurationSec(h, vh);
+      scroll.style.setProperty("--credits-end-y", `${endY}%`);
+      scroll.style.animationDuration = `${duration}s`;
+      scroll.dataset.laidOut = "1";
+      roll.dataset.scrollSec = String(duration);
+    }
+    return Number(roll.dataset.scrollSec) || CREDITS_SCROLL_SEC;
+  }
+
+  /** Advance credits phases: scroll → epilogue → thank-you → subtle button. */
+  updateFinaleCredits(elapsed: number, sunExplodedAt: number | null = null): void {
+    const roll = this.root.querySelector<HTMLElement>(".credits-roll");
+    if (!roll) {
+      return;
+    }
+    const scrollSec = this.layoutFinaleCredits(roll);
+    const phase = finaleCreditsPhase(elapsed, scrollSec, sunExplodedAt);
+    roll.classList.toggle("credits-phase-thanks", phase === "thanks" || phase === "button");
+    roll.classList.toggle("credits-phase-button", phase === "button");
+    roll.classList.toggle("credits-phase-epilogue", phase === "epilogue");
+
+    const epilogue = roll.querySelector<HTMLElement>(".credits-epilogue");
+    const epilogueLine = roll.querySelector<HTMLElement>(".credits-epilogue-line");
+    if (epilogue && epilogueLine) {
+      const frame = finaleEpilogueFrame(elapsed, sunExplodedAt);
+      if (frame.visible) {
+        epilogueLine.textContent = FINALE_EPILOGUE_LINES[frame.lineIndex] ?? "";
+        epilogueLine.classList.toggle("credits-epilogue-hope", frame.hope);
+        epilogue.style.opacity = String(frame.opacity);
+        epilogue.setAttribute("aria-hidden", "false");
+      } else {
+        epilogue.style.opacity = "0";
+        epilogue.setAttribute("aria-hidden", "true");
+      }
     }
   }
 }

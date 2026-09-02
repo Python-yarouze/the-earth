@@ -75,7 +75,8 @@ export class TrailField {
       if (line) {
         const attr = line.geometry.getAttribute("position") as THREE.BufferAttribute;
         attr.needsUpdate = true;
-        line.geometry.setDrawRange(0, count);
+        // A 1-point line draws from (0,0,0) — wait until we have a segment.
+        line.geometry.setDrawRange(0, count >= 2 ? count : 0);
       }
     }
   }

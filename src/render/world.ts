@@ -16,9 +16,46 @@ import {
   intersectHorizontal,
   physicsToWorld,
 } from "./camera";
+import { setupFinaleCamera } from "./cinema";
+import type { FinaleState } from "../game/finale";
 import { addStarfield } from "./stars";
 import { TrailField } from "./trails";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+
+interface NovaBurst {
+  points: THREE.Points;
+  velocities: Float32Array;
+  age: number;
+  maxAge: number;
+}
+
+interface NovaShockwave {
+  mesh: THREE.Mesh;
+  age: number;
+  maxAge: number;
+  maxScale: number;
+}
+
+let particleSoftTex: THREE.CanvasTexture | null = null;
+
+function softParticleTexture(): THREE.CanvasTexture {
+  if (particleSoftTex) {
+    return particleSoftTex;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d")!;
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.35, "rgba(255,220,180,0.65)");
+  g.addColorStop(1, "rgba(255,140,60,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  particleSoftTex = new THREE.CanvasTexture(canvas);
+  particleSoftTex.colorSpace = THREE.SRGBColorSpace;
+  return particleSoftTex;
+}
 
 export class World {
   readonly renderer: THREE.WebGLRenderer;
@@ -39,7 +76,11 @@ export class World {
   private arrows = new THREE.Group();
   private selectRing: THREE.Mesh;
   private flash: THREE.PointLight;
-  private flashAge = 0;
+  private flashLife = 0;
+  private flashDuration = 1;
+  private flashPeak = 18;
+  private novaBursts: NovaBurst[] = [];
+  private novaWaves: NovaShockwave[] = [];
   private sky: THREE.Mesh;
   private grid: THREE.GridHelper;
   private ship: THREE.Group | null = null;
@@ -58,6 +99,9 @@ export class World {
   private readonly _com = new THREE.Vector3();
   private readonly ambientBase = 0.28;
   private readonly ambientBaseColor = new THREE.Color(0x7a8aa8);
+  private finaleActive = false;
+  private savedDamping = true;
+  private savedAmbient = 0.28;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -180,11 +224,47 @@ export class World {
     this.watching = watching;
     this.grid.visible = !watching;
     this.showHeightGuides = !watching;
-    this.controls.autoRotate = watching && !this.povFocus;
+    if (!this.finaleActive) {
+      this.controls.autoRotate = watching && !this.povFocus;
+    }
     this.controls.autoRotateSpeed = 0.48;
     if (!watching && this.povFocus) {
       this.endBodyPov([]);
     }
+  }
+
+  /** Scripted finale shot: hide build aids, lock auto-rotate, brighten fill light. */
+  enterFinale(state: FinaleState, bodies: readonly Body[]): void {
+    this.finaleActive = true;
+    this.watching = true;
+    this.povFocus = null;
+    this.povFocusId = null;
+    this.grid.visible = false;
+    this.showHeightGuides = false;
+    this.trails.setVisible(true);
+    this.controls.enablePan = true;
+    this.controls.enableRotate = true;
+    this.controls.enableZoom = true;
+    this.controls.enabled = true;
+    this.savedDamping = this.controls.enableDamping;
+    this.controls.enableDamping = false;
+    this.controls.autoRotate = false;
+    this.savedAmbient = this.ambient.intensity;
+    this.ambient.intensity = 0.46;
+    this.trails.reset();
+    setupFinaleCamera(state, this.camera, this.controls, bodies);
+  }
+
+  exitFinale(): void {
+    this.finaleActive = false;
+    this.controls.enableDamping = this.savedDamping;
+    this.controls.autoRotate = false;
+    this.ambient.intensity = this.savedAmbient;
+    this.trails.reset();
+  }
+
+  isFinaleActive(): boolean {
+    return this.finaleActive;
   }
 
   resize(): void {
@@ -338,9 +418,132 @@ export class World {
   ): void {
     const w = physicsToWorld(pos);
     this.flash.position.copy(w);
-    this.flash.color.setHex(kind === "earth-lost" ? 0xff8866 : kind === "destroy" || kind === "shatter" || kind === "burn" ? 0xffd27a : kind === "swallow" ? 0x884466 : kind === "big-bang" ? 0xffffff : 0xffffff);
-    this.flash.intensity = kind === "merge" ? 8 : kind === "big-bang" ? 40 : 18;
-    this.flashAge = kind === "big-bang" ? 2.2 : 1;
+    this.flash.color.setHex(
+      kind === "earth-lost"
+        ? 0xff8866
+        : kind === "destroy" || kind === "shatter" || kind === "burn"
+          ? 0xffd27a
+          : kind === "swallow"
+            ? 0x884466
+            : kind === "supernova"
+              ? 0xfff4e8
+              : 0xffffff,
+    );
+    if (kind === "supernova") {
+      this.flashPeak = 140;
+      this.flashDuration = 4.2;
+    } else if (kind === "big-bang") {
+      this.flashPeak = 52;
+      this.flashDuration = 2.6;
+    } else if (kind === "merge") {
+      this.flashPeak = 8;
+      this.flashDuration = 1;
+    } else {
+      this.flashPeak = 18;
+      this.flashDuration = 1;
+    }
+    this.flashLife = this.flashDuration;
+    this.flash.intensity = this.flashPeak;
+  }
+
+  /** Procedural supernova burst (Three.js particles — no external asset). */
+  supernova(pos: { x: number; y: number; z: number }): void {
+    const w = physicsToWorld(pos);
+    this.pulse(pos, "supernova");
+    this.skyFlareColor.setHex(0xffe8c8);
+    this.skyFlareAge = 3.2;
+
+    const count = 1400;
+    const positions = new Float32Array(count * 3);
+    const velocities = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const speed = 55 + Math.random() * 145;
+      const vx = Math.sin(phi) * Math.cos(theta) * speed;
+      const vy = Math.cos(phi) * speed * 0.42;
+      const vz = Math.sin(phi) * Math.sin(theta) * speed;
+      positions[i * 3] = vx * 0.02;
+      positions[i * 3 + 1] = vy * 0.02;
+      positions[i * 3 + 2] = vz * 0.02;
+      velocities[i * 3] = vx;
+      velocities[i * 3 + 1] = vy;
+      velocities[i * 3 + 2] = vz;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({
+      map: softParticleTexture(),
+      size: 7,
+      color: 0xffeedd,
+      transparent: true,
+      opacity: 0.95,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      sizeAttenuation: true,
+    });
+    const points = new THREE.Points(geo, mat);
+    points.position.copy(w);
+    this.scene.add(points);
+    this.novaBursts.push({ points, velocities, age: 0, maxAge: 5.5 });
+
+    for (let ring = 0; ring < 2; ring++) {
+      const wave = new THREE.Mesh(
+        new THREE.RingGeometry(4 + ring * 6, 10 + ring * 8, 72),
+        new THREE.MeshBasicMaterial({
+          color: ring === 0 ? 0xffffff : 0xffaa66,
+          transparent: true,
+          opacity: 0.75 - ring * 0.2,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        }),
+      );
+      wave.position.copy(w);
+      wave.lookAt(this.camera.position);
+      this.scene.add(wave);
+      this.novaWaves.push({ mesh: wave, age: ring * 0.12, maxAge: 2.8, maxScale: 48 + ring * 22 });
+    }
+  }
+
+  private tickSupernova(dt: number): void {
+    for (let i = this.novaBursts.length - 1; i >= 0; i--) {
+      const burst = this.novaBursts[i]!;
+      burst.age += dt;
+      const u = burst.age / burst.maxAge;
+      const posAttr = burst.points.geometry.getAttribute("position") as THREE.BufferAttribute;
+      const arr = posAttr.array as Float32Array;
+      for (let p = 0; p < arr.length; p += 3) {
+        arr[p] += burst.velocities[p]! * dt;
+        arr[p + 1] += burst.velocities[p + 1]! * dt;
+        arr[p + 2] += burst.velocities[p + 2]! * dt;
+      }
+      posAttr.needsUpdate = true;
+      const mat = burst.points.material as THREE.PointsMaterial;
+      mat.opacity = Math.max(0, 0.95 * (1 - u * u));
+      mat.size = 7 + u * 10;
+      if (burst.age >= burst.maxAge) {
+        this.scene.remove(burst.points);
+        burst.points.geometry.dispose();
+        mat.dispose();
+        this.novaBursts.splice(i, 1);
+      }
+    }
+    for (let i = this.novaWaves.length - 1; i >= 0; i--) {
+      const wave = this.novaWaves[i]!;
+      wave.age += dt;
+      const u = wave.age / wave.maxAge;
+      const scale = 1 + u * wave.maxScale;
+      wave.mesh.scale.setScalar(scale);
+      const mat = wave.mesh.material as THREE.MeshBasicMaterial;
+      mat.opacity = Math.max(0, (0.75 - u) * (1 - u));
+      if (wave.age >= wave.maxAge) {
+        this.scene.remove(wave.mesh);
+        wave.mesh.geometry.dispose();
+        mat.dispose();
+        this.novaWaves.splice(i, 1);
+      }
+    }
   }
 
   skyFlare(): void {
@@ -386,9 +589,11 @@ export class World {
 
   render(dt: number): void {
     this.sky.rotation.y += dt * 0.003;
-    if (this.flashAge > 0) {
-      this.flashAge = Math.max(0, this.flashAge - dt * 2.4);
-      this.flash.intensity = (this.flash.intensity > 30 ? 40 : 18) * this.flashAge;
+    this.tickSupernova(dt);
+    if (this.flashLife > 0) {
+      this.flashLife = Math.max(0, this.flashLife - dt);
+      const u = this.flashDuration > 0 ? this.flashLife / this.flashDuration : 0;
+      this.flash.intensity = this.flashPeak * u;
     }
     if (this.skyFlareAge > 0) {
       this.skyFlareAge = Math.max(0, this.skyFlareAge - dt * 0.7);
@@ -409,7 +614,9 @@ export class World {
       }
     }
     this.controls.update();
-    if (this.povFocus) {
+    if (this.finaleActive) {
+      this.controls.autoRotate = false;
+    } else if (this.povFocus) {
       this.anchorBodyPov(this.povFocus);
     }
     this.renderer.render(this.scene, this.camera);

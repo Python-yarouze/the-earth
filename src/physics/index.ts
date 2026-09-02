@@ -42,6 +42,7 @@ export {
   MOON_ORBIT_R,
   reseatMoon,
   step,
+  stepFinale,
   totalEnergy,
   twoBodyCircular,
 } from "./engine";

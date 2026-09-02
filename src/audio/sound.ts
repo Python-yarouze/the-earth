@@ -1,3 +1,8 @@
+/** Full CMSL recording for the destroyer finale (played from the start, no trim). */
+const FINALE_TRACK_URL = "./audio/Dvorak-Symphony-No9-4th-2013.mp3";
+const FINALE_TRACK_GAIN = 0.5;
+const FINALE_SYNTH_FALLBACK_SEC = 240;
+
 export class Sound {
   private ctx: AudioContext | null = null;
   enabled = true;
@@ -8,6 +13,11 @@ export class Sound {
   private looping = false;
   private finaleTimer: number | null = null;
   private finaleNodes: OscillatorNode[] = [];
+  private finaleTrackBuffer: AudioBuffer | null = null;
+  private finaleTrackPromise: Promise<AudioBuffer | null> | null = null;
+  private finaleSource: AudioBufferSourceNode | null = null;
+  private finaleGain: GainNode | null = null;
+  private finaleToken = 0;
 
   private ensure(): AudioContext {
     if (!this.ctx) {
@@ -225,33 +235,67 @@ export class Sound {
     }
   }
 
-  /** Simplified "From the New World" (Largo) arrangement for the destroyer finale. */
-  startFinaleMusic(onEnd?: () => void): void {
-    this.stopFinaleMusic();
-    this.stopChimeLoop();
-    this.stopAmbient();
-    if (!this.enabled) {
-      onEnd?.();
-      return;
+  private loadFinaleTrack(): Promise<AudioBuffer | null> {
+    if (this.finaleTrackBuffer) {
+      return Promise.resolve(this.finaleTrackBuffer);
+    }
+    if (this.finaleTrackPromise) {
+      return this.finaleTrackPromise;
     }
     const ctx = this.ensure();
-    // Largo theme — public-domain melody, original Web Audio arrangement.
+    this.finaleTrackPromise = fetch(FINALE_TRACK_URL)
+      .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error("finale track missing"))))
+      .then((data) => ctx.decodeAudioData(data))
+      .then((buffer) => {
+        this.finaleTrackBuffer = buffer;
+        return buffer;
+      })
+      .catch(() => null);
+    return this.finaleTrackPromise;
+  }
+
+  /** Play the full recording from 0:00 at constant volume. */
+  private playFinaleTrack(buffer: AudioBuffer, onEnd?: () => void): void {
+    const ctx = this.ensure();
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    const gain = ctx.createGain();
+    const now = ctx.currentTime;
+    gain.gain.setValueAtTime(FINALE_TRACK_GAIN, now);
+    src.connect(gain);
+    gain.connect(ctx.destination);
+    src.start(now);
+    this.finaleSource = src;
+    this.finaleGain = gain;
+    src.onended = () => {
+      if (this.finaleSource === src) {
+        this.finaleSource = null;
+        this.finaleGain = null;
+        onEnd?.();
+      }
+    };
+  }
+
+  /** Fallback "From the New World" (Largo) arrangement if the real track can't load. */
+  private playFinaleSynth(onEnd?: () => void): void {
+    const ctx = this.ensure();
     const melody = [
       392, 392, 392, 349, 311, 349, 294, 262, 294, 311, 349, 392, 440, 392, 349, 311,
       294, 262, 247, 262, 294, 311, 349, 311, 294, 262, 247, 220, 247, 262, 294, 311,
       349, 392, 440, 466, 440, 392, 349, 311, 294, 311, 349, 392, 440, 392, 349, 311,
     ];
-    const dur = 1.05;
+    const dur = 0.72;
+    const endAt = performance.now() + FINALE_SYNTH_FALLBACK_SEC * 1000;
     let i = 0;
     const step = () => {
-      if (i >= melody.length) {
+      if (performance.now() >= endAt) {
         this.finaleTimer = window.setTimeout(() => {
           this.finaleTimer = null;
           onEnd?.();
-        }, 800);
+        }, 400);
         return;
       }
-      const freq = melody[i]!;
+      const freq = melody[i % melody.length]!;
       const osc = ctx.createOscillator();
       const g = ctx.createGain();
       osc.type = "triangle";
@@ -270,7 +314,30 @@ export class Sound {
     step();
   }
 
+  /** Plays the finale BGM — the full recording if it loads, else a synth fallback. */
+  startFinaleMusic(onEnd?: () => void): void {
+    this.stopFinaleMusic();
+    this.stopChimeLoop();
+    this.stopAmbient();
+    const token = ++this.finaleToken;
+    if (!this.enabled) {
+      onEnd?.();
+      return;
+    }
+    void this.loadFinaleTrack().then((buffer) => {
+      if (token !== this.finaleToken) {
+        return;
+      }
+      if (buffer) {
+        this.playFinaleTrack(buffer, onEnd);
+      } else {
+        this.playFinaleSynth(onEnd);
+      }
+    });
+  }
+
   stopFinaleMusic(): void {
+    this.finaleToken++;
     if (this.finaleTimer !== null) {
       window.clearTimeout(this.finaleTimer);
       this.finaleTimer = null;
@@ -284,9 +351,26 @@ export class Sound {
       }
     }
     this.finaleNodes = [];
+    if (this.finaleSource) {
+      try {
+        this.finaleSource.stop();
+        this.finaleSource.disconnect();
+      } catch {
+        /* ignore */
+      }
+      this.finaleSource = null;
+    }
+    if (this.finaleGain) {
+      try {
+        this.finaleGain.disconnect();
+      } catch {
+        /* ignore */
+      }
+      this.finaleGain = null;
+    }
   }
 
   isFinalePlaying(): boolean {
-    return this.finaleTimer !== null || this.finaleNodes.length > 0;
+    return this.finaleTimer !== null || this.finaleNodes.length > 0 || this.finaleSource !== null;
   }
 }

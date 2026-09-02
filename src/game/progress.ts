@@ -364,6 +364,45 @@ export function saveProgress(progress: Progress): void {
   }
 }
 
+export function clearProgress(): void {
+  try {
+    localStorage.removeItem(KEY);
+  } catch {
+    /* private mode */
+  }
+}
+
+/** Debug: unlock every catalog entry, extra, and discovery. */
+export function unlockAllProgress(): Progress {
+  return {
+    ...defaultProgress(),
+    hasPlayed: true,
+    unlocked: uniqueIds([...UNLOCKABLE_IDS]),
+    extras: uniqueExtras([...EXTRAS]),
+    discoveries: DISCOVERIES.map((d) => d.id),
+    destroyerSeen: true,
+    postSolarBaselines: zeroPostSolarBaselines(),
+    watchSec: 99999,
+    balances: 999,
+    longStables: 99,
+    blackHoleSeen: true,
+    bigBangSeen: true,
+    cometSeen: 99,
+    swarmSeen: 99,
+    flareSeen: 99,
+    meteorsSeen: 99,
+    shipsSeen: 99,
+    chimesPlayed: CHIME_LOOP_THRESHOLD,
+    povCameraUsed: true,
+    shareUsed: true,
+    randomPlacementUsed: true,
+    solarPresetBalanced: true,
+    twelveBodyBalances: TWELVE_BODY_THRESHOLD,
+    watchedAfterCollapsePostSolar: true,
+    blackHoleSeenPostSolar: true,
+  };
+}
+
 export function isUnlocked(progress: Progress, id: AppearanceId): boolean {
   return progress.unlocked.includes(id);
 }

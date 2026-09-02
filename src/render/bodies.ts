@@ -222,6 +222,39 @@ function mapFor(appearance: AppearanceId, textures: BodyTextures): THREE.Texture
 }
 
 
+function hash01(seedA: number, seedB: number): number {
+  let n = (seedA * 374761393 + seedB * 668265263) | 0;
+  n = (n ^ (n >>> 13)) | 0;
+  n = (n * 1274126177) | 0;
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
+}
+
+/**
+ * Real lightning is mostly dark, punctuated by short, rapid-fire flash
+ * bursts. Model that as: long dark gaps between cycles, with a brief
+ * stuttering burst window (bright flash / mid glow / dark) near the start
+ * of each cycle.
+ */
+function thunderIntensity(bodyId: number, nowSec: number): number {
+  const cycleLen = 2.2 + hash01(bodyId, 999) * 1.8;
+  const cycleIndex = Math.floor(nowSec / cycleLen);
+  const phase = nowSec / cycleLen - cycleIndex;
+  const burstFrac = (0.1 + hash01(bodyId, cycleIndex * 7 + 1) * 0.22) / cycleLen;
+  if (phase > burstFrac) {
+    return 0;
+  }
+  const bucket = Math.floor(nowSec * 45);
+  const roll = hash01(bodyId + cycleIndex * 131, bucket);
+  if (roll > 0.75) {
+    return 1.5 + hash01(bodyId, bucket + 11) * 0.6;
+  }
+  if (roll > 0.45) {
+    return 0.4 + hash01(bodyId, bucket + 3) * 0.35;
+  }
+  return 0;
+}
+
+
 export class BodyView {
   readonly group: THREE.Group;
   readonly id: number;
@@ -237,6 +270,10 @@ export class BodyView {
   private restScale = new THREE.Vector3(1, 1, 1);
   private gamingMat?: THREE.MeshStandardMaterial;
   private thunderMat?: THREE.MeshStandardMaterial;
+  private discoballStudMats: THREE.MeshStandardMaterial[] = [];
+  private discoballFlares: THREE.Sprite[] = [];
+  private discoballGlow?: THREE.Sprite;
+  private discoballBokeh?: THREE.Points;
   private clockHands?: ClockHands;
   private noteFlashUntil = 0;
   private noteFlashDur = 0.22;
@@ -350,6 +387,16 @@ export class BodyView {
       if (body.appearance === "thunder" && this.globe.material instanceof THREE.MeshStandardMaterial) {
         this.thunderMat = this.globe.material;
       }
+      if (body.appearance === "discoball") {
+        if (built.discoballStudMats) {
+          this.discoballStudMats = built.discoballStudMats;
+        }
+        if (built.discoballFlares) {
+          this.discoballFlares = built.discoballFlares;
+        }
+        this.discoballGlow = built.discoballGlow;
+        this.discoballBokeh = built.discoballBokeh;
+      }
     } else {
       const map = mapFor(body.appearance, textures) ?? textures.mars;
       const extras =
@@ -421,11 +468,62 @@ export class BodyView {
       this.clouds.rotation.y = body.spin * 1.15;
     }
     if (this.gamingMat) {
-      const hue = ((body.spin * 0.15) % 1 + 1) % 1;
+      const now = performance.now();
+      const hue = ((now * 0.0025 + body.id * 0.07) % 1 + 1) % 1;
       this.gamingMat.emissive.setHSL(hue, 0.95, 0.5);
+      this.gamingMat.emissiveIntensity = 0.85 + 0.15 * (0.5 + 0.5 * Math.sin(now * 0.012));
     }
     if (this.thunderMat && this.noteFlashUntil <= 0) {
-      this.thunderMat.emissiveIntensity = 0.35 + 0.45 * (0.5 + 0.5 * Math.sin(body.spin * 10));
+      const nowSec = performance.now() / 1000;
+      this.thunderMat.emissiveIntensity = thunderIntensity(body.id, nowSec);
+    }
+    if (this.discoballStudMats.length > 0) {
+      const nowSec = performance.now() / 1000;
+      const bucket = Math.floor(nowSec * 18);
+      for (let i = 0; i < this.discoballStudMats.length; i++) {
+        const roll = hash01(body.id + i * 17, bucket + i);
+        const pulse = hash01(body.id + i, bucket + i * 3 + 1);
+        const intensity = roll > 0.88 ? 0.9 + pulse * 0.3 : roll > 0.55 ? 0.15 + pulse * 0.25 : 0.05 + pulse * 0.12;
+        this.discoballStudMats[i]!.emissiveIntensity = intensity;
+        if (roll > 0.88) {
+          const hue = (i * 0.11 + nowSec * 0.35) % 1;
+          this.discoballStudMats[i]!.emissive.setHSL(hue, 0.35, 0.72);
+        } else {
+          this.discoballStudMats[i]!.emissive.setHex(0xd0d8e0);
+        }
+      }
+    }
+    if (this.discoballFlares.length > 0) {
+      const nowSec = performance.now() / 1000;
+      const bucket = Math.floor(nowSec * 9);
+      const rr = visualRadius(body);
+      for (let i = 0; i < this.discoballFlares.length; i++) {
+        const flare = this.discoballFlares[i]!;
+        const mat = flare.material as THREE.SpriteMaterial;
+        const roll = hash01(body.id * 3 + i * 29, bucket + i * 5);
+        const pulse = hash01(body.id + i * 11, bucket + i * 7 + 3);
+        if (roll > 0.72) {
+          mat.opacity = 0.5 + pulse * 0.5;
+          flare.scale.setScalar(rr * (0.7 + pulse * 0.6));
+        } else {
+          mat.opacity = 0;
+        }
+      }
+    }
+    if (this.discoballGlow) {
+      const mat = this.discoballGlow.material as THREE.SpriteMaterial;
+      const now = performance.now();
+      mat.opacity = 0.28 + 0.14 * (0.5 + 0.5 * Math.sin(now * 0.0009 + body.id));
+      const hue = ((now * 0.00006 + body.id * 0.13) % 1 + 1) % 1;
+      mat.color.setHSL(hue, 0.25, 0.86);
+    }
+    if (this.discoballBokeh) {
+      const mat = this.discoballBokeh.material;
+      if (mat instanceof THREE.PointsMaterial) {
+        const now = performance.now();
+        mat.opacity = 0.35 + 0.25 * (0.5 + 0.5 * Math.sin(now * 0.004 + body.id));
+        mat.size = visualRadius(body) * (0.28 + 0.08 * (0.5 + 0.5 * Math.sin(now * 0.006)));
+      }
     }
     if (this.clockHands) {
       syncClockHands(this.clockHands);

@@ -18,6 +18,10 @@ export type FantasyBuild = {
   rings?: THREE.Mesh;
   adornments?: THREE.Object3D[];
   clockHands?: ClockHands;
+  discoballStudMats?: THREE.MeshStandardMaterial[];
+  discoballFlares?: THREE.Sprite[];
+  discoballGlow?: THREE.Sprite;
+  discoballBokeh?: THREE.Points;
 };
 
 function solid(extras: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial {
@@ -45,6 +49,50 @@ function canvasTex(
   map.colorSpace = THREE.SRGBColorSpace;
   map.anisotropy = 4;
   return map;
+}
+
+/** Soft round glow — white core fading to nothing. Used for glints and ambient halos. */
+function softGlowTexture(size = 128): THREE.CanvasTexture {
+  return canvasTex((ctx, s) => {
+    const c = s / 2;
+    const grad = ctx.createRadialGradient(c, c, 0, c, c, c);
+    grad.addColorStop(0, "rgba(255,255,255,1)");
+    grad.addColorStop(0.25, "rgba(255,255,255,0.85)");
+    grad.addColorStop(0.55, "rgba(255,255,255,0.22)");
+    grad.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, s, s);
+  }, size);
+}
+
+/** Four-point star flare — a bright core with two crossed light spikes, like a lens glint. */
+function starFlareTexture(size = 128): THREE.CanvasTexture {
+  return canvasTex((ctx, s) => {
+    const c = s / 2;
+    const core = ctx.createRadialGradient(c, c, 0, c, c, s * 0.5);
+    core.addColorStop(0, "rgba(255,255,255,1)");
+    core.addColorStop(0.14, "rgba(255,255,255,0.9)");
+    core.addColorStop(0.4, "rgba(255,255,255,0.12)");
+    core.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = core;
+    ctx.fillRect(0, 0, s, s);
+    ctx.globalCompositeOperation = "lighter";
+    const spike = (len: number, w: number, alpha: number) => {
+      const grad = ctx.createLinearGradient(c - len, c, c + len, c);
+      grad.addColorStop(0, "rgba(255,255,255,0)");
+      grad.addColorStop(0.5, `rgba(255,255,255,${alpha})`);
+      grad.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(c - len, c - w / 2, len * 2, w);
+    };
+    spike(s * 0.5, s * 0.045, 0.85);
+    ctx.save();
+    ctx.translate(c, c);
+    ctx.rotate(Math.PI / 2);
+    ctx.translate(-c, -c);
+    spike(s * 0.5, s * 0.045, 0.85);
+    ctx.restore();
+  }, size);
 }
 
 function brickMap(): THREE.CanvasTexture {
@@ -261,48 +309,127 @@ function buildSnowball(r: number): FantasyBuild {
 }
 
 function buildDiscoball(r: number): FantasyBuild {
+  const geo = new THREE.IcosahedronGeometry(r, 2);
   const globe = new THREE.Mesh(
-    new THREE.SphereGeometry(r, 32, 24),
+    geo,
     solid({
-      color: 0xd8dce8,
-      roughness: 0.05,
-      metalness: 0.98,
-      envMapIntensity: 2.4,
+      color: 0xeef2f8,
+      roughness: 0.12,
+      metalness: 0.92,
+      flatShading: true,
+      envMapIntensity: 1.8,
+      emissive: 0x8a9aaa,
+      emissiveIntensity: 0.18,
     }),
   );
   const adornments: THREE.Object3D[] = [];
-  const tileMat = solid({
-    color: 0xffffff,
-    roughness: 0.04,
-    metalness: 1,
-    envMapIntensity: 2.8,
-    emissive: 0xa0a8b8,
-    emissiveIntensity: 0.08,
-  });
-  const rings = 14;
-  const cols = 28;
-  for (let row = 0; row < rings; row++) {
-    const phi = ((row + 0.5) / rings) * Math.PI;
-    const rowR = Math.sin(phi) * r;
-    const y = Math.cos(phi) * r;
-    const count = Math.max(4, Math.floor(cols * Math.sin(phi)));
-    for (let i = 0; i < count; i++) {
-      const a = (i / count) * Math.PI * 2 + (row % 2) * (Math.PI / count);
-      const tile = new THREE.Mesh(new THREE.PlaneGeometry(r * 0.14, r * 0.14), tileMat);
-      tile.position.set(Math.cos(a) * rowR, y, Math.sin(a) * rowR);
-      tile.lookAt(0, 0, 0);
-      adornments.push(tile);
+  const discoballStudMats: THREE.MeshStandardMaterial[] = [];
+  const tmp = new THREE.Vector3();
+  const faces = geo.index;
+  const pos = geo.attributes.position;
+  if (faces) {
+    for (let i = 0; i < faces.count; i += 3) {
+      tmp.set(0, 0, 0);
+      for (let k = 0; k < 3; k++) {
+        const idx = faces.getX(i + k);
+        tmp.x += pos.getX(idx);
+        tmp.y += pos.getY(idx);
+        tmp.z += pos.getZ(idx);
+      }
+      tmp.multiplyScalar(1 / 3);
+      const studMat = solid({
+        color: 0xffffff,
+        roughness: 0.08,
+        metalness: 1,
+        envMapIntensity: 2,
+        emissive: 0xd0d8e0,
+        emissiveIntensity: 0.2,
+      });
+      discoballStudMats.push(studMat);
+      const stud = new THREE.Mesh(new THREE.BoxGeometry(r * 0.1, r * 0.1, r * 0.025), studMat);
+      stud.position.copy(tmp).multiplyScalar(1.03);
+      stud.lookAt(0, 0, 0);
+      adornments.push(stud);
     }
   }
-  const lamp = new THREE.PointLight(0xfff0d0, 2.2, r * 12);
-  lamp.position.set(r * 1.8, r * 0.6, r * 1.2);
-  const lampMesh = new THREE.Mesh(
-    new THREE.SphereGeometry(r * 0.12, 8, 6),
-    new THREE.MeshBasicMaterial({ color: 0xfff8e8 }),
+
+  // Ambient glow: a soft camera-facing halo so the ball reads as a light
+  // source rather than a plain metal sphere.
+  const glowTex = softGlowTexture();
+  const discoballGlow = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: glowTex,
+      color: 0xdce8ff,
+      transparent: true,
+      opacity: 0.4,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
   );
-  lampMesh.position.copy(lamp.position);
-  adornments.push(lamp, lampMesh);
-  return { globe, adornments };
+  discoballGlow.scale.setScalar(r * 3.4);
+  adornments.push(discoballGlow);
+
+  // Flare glints: camera-facing star sprites scattered over the surface,
+  // standing in for real specular highlights bouncing off many tiny mirrors.
+  const flareTex = starFlareTexture();
+  const flareHues = [0.86, 0.7, 0.58, 0.5, 0.92, 0.62, 0.78, 0.4, 0.02, 0.66];
+  const discoballFlares: THREE.Sprite[] = [];
+  const flareCount = 16;
+  for (let i = 0; i < flareCount; i++) {
+    const phi = Math.acos(1 - 2 * ((i + 0.5) / flareCount));
+    const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+    const dist = r * 1.02;
+    const sprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: flareTex,
+        color: new THREE.Color().setHSL(flareHues[i % flareHues.length]!, 0.55, 0.85),
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    sprite.position.set(
+      Math.sin(phi) * Math.cos(theta) * dist,
+      Math.cos(phi) * dist,
+      Math.sin(phi) * Math.sin(theta) * dist,
+    );
+    sprite.scale.setScalar(r * 0.85);
+    discoballFlares.push(sprite);
+    adornments.push(sprite);
+  }
+
+  const bokehCount = 28;
+  const bokehPos = new Float32Array(bokehCount * 3);
+  const bokehSizes = new Float32Array(bokehCount);
+  for (let i = 0; i < bokehCount; i++) {
+    const phi = Math.acos(1 - 2 * ((i + 0.5) / bokehCount));
+    const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+    const dist = r * (1.35 + (i % 5) * 0.12);
+    bokehPos[i * 3] = Math.sin(phi) * Math.cos(theta) * dist;
+    bokehPos[i * 3 + 1] = Math.cos(phi) * dist;
+    bokehPos[i * 3 + 2] = Math.sin(phi) * Math.sin(theta) * dist;
+    bokehSizes[i] = r * (0.18 + (i % 4) * 0.06);
+  }
+  const bokehGeo = new THREE.BufferGeometry();
+  bokehGeo.setAttribute("position", new THREE.BufferAttribute(bokehPos, 3));
+  bokehGeo.setAttribute("size", new THREE.BufferAttribute(bokehSizes, 1));
+  const discoballBokeh = new THREE.Points(
+    bokehGeo,
+    new THREE.PointsMaterial({
+      map: glowTex,
+      color: 0xffffff,
+      size: r * 0.35,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true,
+    }),
+  );
+  adornments.push(discoballBokeh);
+
+  return { globe, adornments, discoballStudMats, discoballFlares, discoballGlow, discoballBokeh };
 }
 
 function buildDestroyer(r: number): FantasyBuild {
