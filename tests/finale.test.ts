@@ -262,7 +262,7 @@ describe("credit sections", () => {
     expect(CREDIT_SECTIONS.find((s) => s.label === "フォント")?.lines).toEqual([
       "Instrument Serif / IBM Plex Sans",
     ]);
-    expect(CREDIT_SECTIONS.some((s) => s.variant === "epilogue")).toBe(false);
+    expect(CREDIT_SECTIONS.every((s) => !s.lines.includes("そして太陽系は消滅した。"))).toBe(true);
     expect(FINALE_EPILOGUE_LINES).toEqual([
       "そして太陽系は消滅した。",
       "でも、星はまだどこかで回っている。",
