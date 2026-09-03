@@ -1,9 +1,13 @@
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { PerspectiveCamera } from "three";
 import type { Body } from "../physics/body";
-import type { FinaleState } from "../game/finale";
+import {
+  finaleHitRadius,
+  finaleSunWindupShake,
+  type FinaleState,
+} from "../game/finale";
 import { visualRadius } from "./bodies";
-import { physicsToWorld } from "./camera";
+import { DEFAULT_MAX_DISTANCE, DEFAULT_MIN_DISTANCE, physicsToWorld } from "./camera";
 
 export interface CinemaState {
   active: boolean;
@@ -97,7 +101,10 @@ export function tickCinema(
   return state.active;
 }
 
-/** Frame the sun, planets, and incoming destroyer along the approach axis. */
+/**
+ * Keep the player's camera pose at credits start; only widen clip / orbit limits
+ * so the far-spawned destroyer stays in view without near-plane clipping.
+ */
 export function setupFinaleCamera(
   state: FinaleState,
   camera: PerspectiveCamera,
@@ -105,23 +112,70 @@ export function setupFinaleCamera(
   bodies: readonly Body[] = [],
 ): void {
   const sunW = physicsToWorld(state.sunAnchor);
-  const dir = state.approachDir;
   let maxR = 140;
+  let largestBodyR = 40;
   for (const body of bodies) {
     if (!body.alive || body.ephemeral) {
       continue;
     }
+    const vr = visualRadius(body);
+    largestBodyR = Math.max(largestBodyR, vr);
     const w = physicsToWorld(body.pos);
-    const span = Math.hypot(w.x - sunW.x, w.y - sunW.y, w.z - sunW.z) + visualRadius(body);
+    const span = Math.hypot(w.x - sunW.x, w.y - sunW.y, w.z - sunW.z) + vr;
     maxR = Math.max(maxR, span);
   }
-  const dist = Math.min(920, Math.max(300, maxR * 2.35));
-  const camX = sunW.x - dir.x * dist;
-  const camY = sunW.y + Math.max(52, state.cameraHeight * (maxR / 180));
-  const camZ = sunW.z - dir.z * dist;
-  camera.position.set(camX, camY, camZ);
-  controls.target.set(sunW.x, sunW.y, sunW.z);
-  camera.lookAt(sunW.x, sunW.y, sunW.z);
+  const minDist = Math.max(DEFAULT_MIN_DISTANCE * 2.8, largestBodyR * 2.05);
+  const currentDist = Math.max(controls.getDistance(), 1);
+  // Do not raise minDistance above the live pose — that would shove the camera.
+  controls.minDistance = Math.min(minDist, currentDist * 0.95);
+  controls.maxDistance = Math.max(DEFAULT_MAX_DISTANCE, maxR * 3.2, 2800, currentDist * 1.05);
+  camera.near = 0.08;
+  camera.far = Math.max(10000, maxR * 8);
+  camera.updateProjectionMatrix();
   controls.update();
 }
 
+/**
+ * Keep the lens clear of the destroyer shell and apply a gentle wind-up shake
+ * after sun contact (amplitude stays low to avoid motion sickness).
+ */
+export function updateFinaleCamera(
+  state: FinaleState,
+  camera: PerspectiveCamera,
+  controls: OrbitControls,
+  bodies: readonly Body[],
+  elapsedWallMs: number,
+): void {
+  const destroyer = bodies.find((b) => b.id === state.destroyerId && b.alive);
+  if (destroyer) {
+    const dW = physicsToWorld(destroyer.pos);
+    const need = finaleHitRadius(destroyer) * 1.85 + camera.near * 8;
+    const offset = camera.position.clone().sub(dW);
+    const sep = offset.length();
+    if (sep < need && sep > 1e-4) {
+      camera.position.copy(dW).addScaledVector(offset.normalize(), need);
+      controls.target.lerp(physicsToWorld(state.sunAnchor), 0.02);
+    }
+  }
+
+  const shake = finaleSunWindupShake(state);
+  if (shake > 0) {
+    const t = elapsedWallMs * 0.001;
+    // Security-cam earthquake: irregular discrete jitter + high-freq grain.
+    const amp = 0.55 + shake * 1.65;
+    const bucket = Math.floor(elapsedWallMs / 18);
+    const hash = (n: number) => {
+      const x = Math.sin(bucket * 127.1 + n * 311.7) * 43758.5453;
+      return x - Math.floor(x);
+    };
+    const jx = (hash(1) - 0.5) * 2 + Math.sin(t * 88) * 0.25;
+    const jy = (hash(2) - 0.5) * 2 + Math.sin(t * 101 + 1.1) * 0.22;
+    const jz = (hash(3) - 0.5) * 2 + Math.sin(t * 79 + 0.4) * 0.25;
+    camera.position.x += jx * amp;
+    camera.position.y += jy * amp * 0.7;
+    camera.position.z += jz * amp;
+    controls.target.x += jx * amp * 0.18;
+    controls.target.y += jy * amp * 0.12;
+    controls.target.z += jz * amp * 0.18;
+  }
+}

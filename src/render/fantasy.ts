@@ -18,6 +18,8 @@ export type FantasyBuild = {
   rings?: THREE.Mesh;
   adornments?: THREE.Object3D[];
   clockHands?: ClockHands;
+  destroyerAura?: THREE.Group;
+  emberAura?: THREE.Group;
   discoballStudMats?: THREE.MeshStandardMaterial[];
   discoballFlares?: THREE.Sprite[];
   discoballGlow?: THREE.Sprite;
@@ -114,6 +116,243 @@ function brickMap(): THREE.CanvasTexture {
       }
     }
   });
+}
+
+/** Dark chassis with neon grid + RGB strips (emissive animation tints the glow). */
+function gamingMap(): THREE.CanvasTexture {
+  return canvasTex((ctx, s) => {
+    ctx.fillStyle = "#0c0c10";
+    ctx.fillRect(0, 0, s, s);
+    ctx.strokeStyle = "rgba(40, 255, 120, 0.22)";
+    ctx.lineWidth = 1;
+    const step = s / 16;
+    for (let i = 0; i <= 16; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * step, 0);
+      ctx.lineTo(i * step, s);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, i * step);
+      ctx.lineTo(s, i * step);
+      ctx.stroke();
+    }
+    const bands = [
+      { y: 0.18, h: 0.06, colors: ["#ff2244", "#44ff66", "#4488ff"] },
+      { y: 0.48, h: 0.05, colors: ["#ff44cc", "#44ffff", "#ffaa22"] },
+      { y: 0.78, h: 0.07, colors: ["#66ff33", "#ff6622", "#8866ff"] },
+    ];
+    for (const band of bands) {
+      const by = s * band.y;
+      const bh = s * band.h;
+      const bw = s / band.colors.length;
+      for (let i = 0; i < band.colors.length; i++) {
+        ctx.fillStyle = band.colors[i]!;
+        ctx.globalAlpha = 0.85;
+        ctx.fillRect(i * bw + 2, by, bw - 4, bh);
+      }
+    }
+    ctx.globalAlpha = 1;
+    for (let i = 0; i < 40; i++) {
+      const x = ((i * 47) % s) + 4;
+      const y = ((i * 91) % s) + 4;
+      ctx.fillStyle = i % 3 === 0 ? "#39ff14" : i % 3 === 1 ? "#ff44aa" : "#44aaff";
+      ctx.globalAlpha = 0.55;
+      ctx.fillRect(x, y, 3, 3);
+    }
+    ctx.globalAlpha = 1;
+  }, 512);
+}
+
+/** Soap-film iridescence — soft rainbow swirls on a pale film. */
+function bubbleMap(): THREE.CanvasTexture {
+  return canvasTex((ctx, s) => {
+    const c = s / 2;
+    ctx.fillStyle = "rgba(200, 230, 245, 0.35)";
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 8; i++) {
+      const cx = c + Math.cos(i * 0.9) * s * 0.18;
+      const cy = c + Math.sin(i * 1.1) * s * 0.16;
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, s * (0.22 + (i % 3) * 0.06));
+      const hue = (i * 47) % 360;
+      g.addColorStop(0, `hsla(${hue}, 85%, 72%, 0.55)`);
+      g.addColorStop(0.45, `hsla(${(hue + 40) % 360}, 70%, 60%, 0.28)`);
+      g.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(cx, cy, s * 0.32, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (let i = 0; i < 5; i++) {
+      ctx.strokeStyle = `hsla(${(i * 70 + 20) % 360}, 80%, 70%, 0.35)`;
+      ctx.lineWidth = 2 + (i % 2);
+      ctx.beginPath();
+      ctx.ellipse(c, c, s * (0.28 + i * 0.06), s * (0.22 + i * 0.05), i * 0.4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    const highlight = ctx.createRadialGradient(c * 0.7, c * 0.65, 0, c * 0.7, c * 0.65, s * 0.2);
+    highlight.addColorStop(0, "rgba(255,255,255,0.65)");
+    highlight.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = highlight;
+    ctx.fillRect(0, 0, s, s);
+  }, 512);
+}
+
+/** Storm body albedo — charcoal clouds. */
+function thunderAlbedoMap(): THREE.CanvasTexture {
+  return canvasTex((ctx, s) => {
+    ctx.fillStyle = "#1a1524";
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 28; i++) {
+      const x = Math.random() * s;
+      const y = Math.random() * s;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, s * (0.08 + Math.random() * 0.12));
+      const v = 30 + Math.floor(Math.random() * 40);
+      g.addColorStop(0, `rgba(${v},${v - 8},${v + 20},0.7)`);
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x, y, s * 0.18, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }, 512);
+}
+
+/** Lightning veins for emissiveMap — white strokes on black. */
+function thunderEmissiveMap(): THREE.CanvasTexture {
+  return canvasTex((ctx, s) => {
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, s, s);
+    const bolt = (x0: number, y0: number, segs: number, spread: number) => {
+      let x = x0;
+      let y = y0;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      for (let i = 0; i < segs; i++) {
+        x += (Math.random() - 0.5) * spread;
+        y += s / segs;
+        ctx.lineTo(x, y);
+        if (Math.random() > 0.55) {
+          const bx = x + (Math.random() - 0.5) * spread * 0.8;
+          const by = y + s / segs * 0.6;
+          ctx.moveTo(x, y);
+          ctx.lineTo(bx, by);
+          ctx.moveTo(x, y);
+        }
+      }
+      ctx.strokeStyle = "rgba(255,255,255,0.95)";
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(200,180,255,0.45)";
+      ctx.lineWidth = 6;
+      ctx.stroke();
+    };
+    bolt(s * 0.35, s * 0.05, 10, s * 0.12);
+    bolt(s * 0.62, s * 0.1, 9, s * 0.1);
+    bolt(s * 0.2, s * 0.35, 7, s * 0.09);
+    bolt(s * 0.78, s * 0.4, 8, s * 0.11);
+  }, 512);
+}
+
+/** Gold / silver glitter ground. */
+function sparkleMap(): THREE.CanvasTexture {
+  return canvasTex((ctx, s) => {
+    const base = ctx.createLinearGradient(0, 0, s, s);
+    base.addColorStop(0, "#f5e6b8");
+    base.addColorStop(0.45, "#e8d090");
+    base.addColorStop(1, "#d0c8b0");
+    ctx.fillStyle = base;
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 900; i++) {
+      const x = Math.random() * s;
+      const y = Math.random() * s;
+      const bright = Math.random();
+      if (bright > 0.82) {
+        ctx.fillStyle = `rgba(255,255,255,${0.55 + bright * 0.4})`;
+      } else if (bright > 0.5) {
+        ctx.fillStyle = `rgba(255,220,120,${0.4 + bright * 0.4})`;
+      } else {
+        ctx.fillStyle = `rgba(180,160,120,${0.25 + bright * 0.3})`;
+      }
+      const sz = bright > 0.9 ? 2.2 : 0.8 + Math.random() * 1.4;
+      ctx.fillRect(x, y, sz, sz);
+    }
+  }, 512);
+}
+
+/** Near-black seed with faint purple mottling. */
+function voidseedMap(): THREE.CanvasTexture {
+  return canvasTex((ctx, s) => {
+    ctx.fillStyle = "#06040a";
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 20; i++) {
+      const x = Math.random() * s;
+      const y = Math.random() * s;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, s * (0.06 + Math.random() * 0.1));
+      g.addColorStop(0, `rgba(60, 20, 80, ${0.35 + Math.random() * 0.25})`);
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, s, s);
+    }
+    const core = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s * 0.35);
+    core.addColorStop(0, "rgba(20, 8, 28, 0.9)");
+    core.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = core;
+    ctx.fillRect(0, 0, s, s);
+  }, 256);
+}
+
+/** Pale glass with fake caustic swirls. */
+function glassMap(): THREE.CanvasTexture {
+  return canvasTex((ctx, s) => {
+    const c = s / 2;
+    ctx.fillStyle = "#d8eef8";
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 12; i++) {
+      const ang = (i / 12) * Math.PI * 2;
+      const cx = c + Math.cos(ang) * s * 0.15;
+      const cy = c + Math.sin(ang * 1.3) * s * 0.12;
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, s * 0.2);
+      g.addColorStop(0, "rgba(255,255,255,0.55)");
+      g.addColorStop(0.4, "rgba(160,210,230,0.25)");
+      g.addColorStop(1, "rgba(120,180,210,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(cx, cy, s * 0.22, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.ellipse(c, c, s * (0.2 + i * 0.05), s * (0.14 + i * 0.04), i * 0.5, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }, 512);
+}
+
+/** Soft night-sky drowsy shell. */
+function drowsyMap(): THREE.CanvasTexture {
+  return canvasTex((ctx, s) => {
+    const g = ctx.createLinearGradient(0, 0, 0, s);
+    g.addColorStop(0, "#3a4258");
+    g.addColorStop(0.5, "#2a3040");
+    g.addColorStop(1, "#1c2030");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 16; i++) {
+      const x = Math.random() * s;
+      const y = Math.random() * s;
+      const blob = ctx.createRadialGradient(x, y, 0, x, y, s * 0.12);
+      blob.addColorStop(0, "rgba(70, 80, 110, 0.35)");
+      blob.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = blob;
+      ctx.fillRect(0, 0, s, s);
+    }
+    for (let i = 0; i < 60; i++) {
+      ctx.fillStyle = `rgba(200, 210, 240, ${0.15 + Math.random() * 0.4})`;
+      ctx.fillRect(Math.random() * s, Math.random() * s, 1.2, 1.2);
+    }
+  }, 512);
 }
 
 function clockFaceMap(): THREE.CanvasTexture {
@@ -225,54 +464,229 @@ function buildDice(r: number): FantasyBuild {
   return { globe, adornments };
 }
 
+/** Soft teardrop onibi flame — white core → cyan → deep blue, fully transparent margins. */
+function onibiFlameTexture(size = 256): THREE.CanvasTexture {
+  return canvasTex((ctx, s) => {
+    ctx.clearRect(0, 0, s, s);
+    const cx = s * 0.5;
+    // Draw bottom→top so tip is near the top of the canvas.
+    for (let i = 0; i < 70; i++) {
+      const t = i / 69;
+      // Bulbous base, taper to a wispy tip (slight right lean like the reference).
+      const y = s * (0.78 - t * 0.68);
+      const lean = t * t * s * 0.07;
+      const halfW = s * (0.28 * Math.pow(1 - t, 1.15) * (0.55 + 0.45 * Math.sin(Math.PI * Math.min(1, t * 1.15))));
+      const rad = Math.max(s * 0.018, halfW);
+      const g = ctx.createRadialGradient(cx + lean, y, 0, cx + lean, y, rad);
+      if (t < 0.22) {
+        g.addColorStop(0, `rgba(240,255,255,${0.95 - t * 0.2})`);
+        g.addColorStop(0.35, `rgba(140,230,255,${0.75 - t * 0.15})`);
+        g.addColorStop(0.7, `rgba(40,120,255,${0.35 - t * 0.1})`);
+      } else if (t < 0.55) {
+        g.addColorStop(0, `rgba(180,245,255,${0.85 - t * 0.35})`);
+        g.addColorStop(0.4, `rgba(60,160,255,${0.55 - t * 0.25})`);
+        g.addColorStop(0.75, `rgba(20,60,200,${0.28 - t * 0.15})`);
+      } else {
+        g.addColorStop(0, `rgba(100,200,255,${0.55 - t * 0.35})`);
+        g.addColorStop(0.45, `rgba(30,90,220,${0.32 - t * 0.22})`);
+        g.addColorStop(0.8, `rgba(10,30,120,${0.12 - t * 0.08})`);
+      }
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(cx + lean, y, rad, rad * (1.05 + t * 0.35), 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Hot core bloom near the bulb
+    const core = ctx.createRadialGradient(cx, s * 0.62, 0, cx, s * 0.62, s * 0.18);
+    core.addColorStop(0, "rgba(255,255,255,0.95)");
+    core.addColorStop(0.25, "rgba(180,245,255,0.7)");
+    core.addColorStop(0.55, "rgba(60,160,255,0.28)");
+    core.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(cx, s * 0.62, s * 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    // Soft outer haze
+    const haze = ctx.createRadialGradient(cx, s * 0.55, s * 0.08, cx, s * 0.5, s * 0.48);
+    haze.addColorStop(0, "rgba(40,100,255,0)");
+    haze.addColorStop(0.45, "rgba(30,80,220,0.18)");
+    haze.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = haze;
+    ctx.fillRect(0, 0, s, s);
+  }, size);
+}
+
 function buildEmber(r: number): FantasyBuild {
-  // 鬼火: pale blue will-o'-wisp — soft additive lobes, not orange cones.
+  // The body IS the onibi — flame centered on the origin, no solid planet underneath.
+  const flameTex = onibiFlameTexture(256);
+  const softTex = softGlowTexture();
+  // Invisible placeholder so BodyView still has a globe for scale / note-flash hooks.
   const globe = new THREE.Mesh(
-    new THREE.SphereGeometry(r * 0.42, 24, 16),
+    new THREE.SphereGeometry(r * 0.35, 12, 8),
     solid({
-      color: 0xd8f0ff,
-      roughness: 0.25,
-      metalness: 0.05,
+      color: 0xa0e8ff,
+      roughness: 1,
+      metalness: 0,
       emissive: 0x80d8ff,
-      emissiveIntensity: 1.1,
+      emissiveIntensity: 0.5,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
     }),
   );
-  const adornments: THREE.Object3D[] = [];
-  const lobes: Array<{ y: number; s: number; x: number; z: number; op: number; hue: number }> = [
-    { y: 0.35, s: 0.85, x: 0, z: 0, op: 0.55, hue: 0xb8ecff },
-    { y: 0.7, s: 0.7, x: 0.1, z: -0.06, op: 0.45, hue: 0x9ad8ff },
-    { y: 0.55, s: 0.65, x: -0.12, z: 0.08, op: 0.4, hue: 0xe8ffff },
-    { y: 0.95, s: 0.48, x: 0.04, z: 0.04, op: 0.35, hue: 0xffffff },
-    { y: 0.25, s: 0.55, x: -0.05, z: -0.12, op: 0.3, hue: 0x70c8ff },
-  ];
-  for (const lobe of lobes) {
-    const flame = new THREE.Mesh(
-      new THREE.SphereGeometry(r * 0.38 * lobe.s, 16, 12),
-      new THREE.MeshBasicMaterial({
-        color: lobe.hue,
+  globe.visible = false;
+
+  const emberAura = new THREE.Group();
+  emberAura.name = "emberAura";
+
+  const makeFlame = (op: number, w: number, h: number, phase: number, speed: number) => {
+    const sprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: flameTex,
+        color: 0xffffff,
         transparent: true,
-        opacity: lobe.op,
+        opacity: op,
         depthWrite: false,
+        depthTest: true,
         blending: THREE.AdditiveBlending,
       }),
     );
-    flame.scale.set(0.85, 1.55, 0.85);
-    flame.position.set(r * lobe.x, r * lobe.y, r * lobe.z);
-    adornments.push(flame);
-  }
-  const aura = new THREE.Mesh(
-    new THREE.SphereGeometry(r * 1.15, 20, 14),
-    new THREE.MeshBasicMaterial({
-      color: 0x60b0ff,
+    // Anchor on the hot core in the texture so the flame body sits on the planet center.
+    sprite.center.set(0.5, 0.38);
+    sprite.scale.set(r * w, r * h, 1);
+    sprite.position.set(0, 0, 0);
+    sprite.userData.ember = {
+      kind: "flame",
+      phase,
+      speed,
+      baseOp: op,
+      baseSx: r * w,
+      baseSy: r * h,
+      baseY: 0,
+    };
+    return sprite;
+  };
+
+  // Layered copies for volume; same silhouette so it still reads as one flame-body.
+  emberAura.add(makeFlame(1.0, 2.6, 3.4, 0.0, 1.0));
+  emberAura.add(makeFlame(0.6, 2.3, 3.1, 1.4, 1.15));
+  emberAura.add(makeFlame(0.38, 1.95, 2.8, 2.6, 0.85));
+
+  const halo = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: softTex,
+      color: 0x2860ff,
       transparent: true,
-      opacity: 0.14,
+      opacity: 0.4,
       depthWrite: false,
-      side: THREE.BackSide,
       blending: THREE.AdditiveBlending,
     }),
   );
-  adornments.push(aura);
-  return { globe, adornments };
+  halo.scale.set(r * 2.8, r * 3.1, 1);
+  halo.position.set(0, r * 0.15, 0);
+  halo.userData.ember = { kind: "halo", phase: 0.3, baseOp: 0.4, baseSx: r * 2.8, baseSy: r * 3.1 };
+  emberAura.add(halo);
+
+  const sparkCount = 28;
+  const sparkPos = new Float32Array(sparkCount * 3);
+  const sparkPhase = new Float32Array(sparkCount);
+  for (let i = 0; i < sparkCount; i++) {
+    sparkPhase[i] = Math.random();
+    sparkPos[i * 3] = 0;
+    sparkPos[i * 3 + 1] = 0;
+    sparkPos[i * 3 + 2] = 0;
+  }
+  const sparkGeo = new THREE.BufferGeometry();
+  sparkGeo.setAttribute("position", new THREE.BufferAttribute(sparkPos, 3));
+  const sparks = new THREE.Points(
+    sparkGeo,
+    new THREE.PointsMaterial({
+      map: softTex,
+      color: 0xb8e8ff,
+      size: r * 0.085,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true,
+    }),
+  );
+  sparks.userData.ember = { kind: "sparks", phases: sparkPhase, radius: r };
+  emberAura.add(sparks);
+
+  return { globe, emberAura };
+}
+
+/** Flicker the teardrop flame — scale / sway / opacity, not separate ellipsoid tongues. */
+export function syncEmberAura(emberAura: THREE.Group, bodyId: number, nowSec: number): void {
+  const flicker = 0.55 + 0.45 * Math.sin(nowSec * 8.4 + bodyId * 1.7);
+  const flicker2 = 0.55 + 0.45 * Math.sin(nowSec * 13.7 + bodyId * 0.9);
+  const sway = Math.sin(nowSec * 3.8 + bodyId) * 0.12 + Math.sin(nowSec * 6.2) * 0.06;
+
+  for (const child of emberAura.children) {
+    const u = child.userData.ember as
+      | {
+          kind: string;
+          phase?: number;
+          speed?: number;
+          baseOp?: number;
+          baseSx?: number;
+          baseSy?: number;
+          baseY?: number;
+          phases?: Float32Array;
+          radius?: number;
+        }
+      | undefined;
+    if (!u) {
+      continue;
+    }
+
+    if (u.kind === "sparks" && child instanceof THREE.Points) {
+      const pos = child.geometry.getAttribute("position") as THREE.BufferAttribute;
+      const phases = u.phases!;
+      const radius = u.radius ?? 1;
+      for (let i = 0; i < pos.count; i++) {
+        const p = (phases[i]! + nowSec * (0.45 + (i % 5) * 0.07)) % 1;
+        const spread = radius * (0.08 + p * 0.35);
+        const ang = i * 2.1 + nowSec * 0.55 + sway;
+        // Drift through the flame body (core at origin, tip upward).
+        pos.setXYZ(
+          i,
+          Math.cos(ang) * spread * (1 - p * 0.45) + sway * radius * 0.12 * p,
+          radius * (-0.35 + p * 2.2),
+          Math.sin(ang) * spread * (1 - p * 0.45),
+        );
+      }
+      pos.needsUpdate = true;
+      const mat = child.material as THREE.PointsMaterial;
+      mat.opacity = 0.3 + 0.35 * flicker;
+      continue;
+    }
+
+    const speed = u.speed ?? 1;
+    const phase = u.phase ?? 0;
+    const wave = Math.sin(nowSec * (7.2 * speed) + phase);
+    const wave2 = Math.sin(nowSec * (10.5 * speed) + phase * 1.4);
+
+    if (child instanceof THREE.Sprite) {
+      const mat = child.material as THREE.SpriteMaterial;
+      if (typeof u.baseOp === "number") {
+        mat.opacity = u.baseOp * (0.78 + 0.22 * flicker + 0.08 * wave);
+      }
+      if (u.kind === "flame") {
+        const sx = (u.baseSx ?? 1) * (1 + 0.07 * wave + 0.05 * flicker2);
+        const sy = (u.baseSy ?? 1) * (1 + 0.14 * wave2 + 0.1 * flicker);
+        child.scale.set(sx, sy, 1);
+        child.position.y = Math.abs(wave) * (u.baseSy ?? 1) * 0.012;
+        child.material.rotation = sway * (0.55 + 0.25 * speed) + wave * 0.04;
+      } else if (u.kind === "halo") {
+        const sx = (u.baseSx ?? 1) * (1 + 0.08 * flicker);
+        const sy = (u.baseSy ?? 1) * (1 + 0.06 * wave);
+        child.scale.set(sx, sy, 1);
+      }
+    }
+  }
 }
 
 function buildSnowball(r: number): FantasyBuild {
@@ -432,31 +846,237 @@ function buildDiscoball(r: number): FantasyBuild {
   return { globe, adornments, discoballStudMats, discoballFlares, discoballGlow, discoballBokeh };
 }
 
+function ominousNebulaTexture(size = 512): THREE.CanvasTexture {
+  return canvasTex((ctx, s) => {
+    ctx.fillStyle = "#04010a";
+    ctx.fillRect(0, 0, s, s);
+    const c = s / 2;
+
+    // Soft indigo underglow
+    const base = ctx.createRadialGradient(c, c, s * 0.05, c, c, s * 0.55);
+    base.addColorStop(0, "rgba(90,20,120,0.55)");
+    base.addColorStop(0.45, "rgba(40,10,90,0.35)");
+    base.addColorStop(1, "rgba(8,2,20,0)");
+    ctx.fillStyle = base;
+    ctx.fillRect(0, 0, s, s);
+
+    // Spiral arms: magenta ↔ purple ↔ deep blue, broken by dark gaps
+    for (let arm = 0; arm < 5; arm++) {
+      const armPhase = (arm / 5) * Math.PI * 2;
+      for (let i = 0; i < 70; i++) {
+        const u = i / 70;
+        const ang = armPhase + u * Math.PI * 3.2 + Math.sin(u * 9 + arm) * 0.35;
+        const rad = s * (0.08 + u * 0.42);
+        const x = c + Math.cos(ang) * rad;
+        const y = c + Math.sin(ang) * rad * 0.92;
+        const blob = ctx.createRadialGradient(x, y, 0, x, y, s * (0.04 + (1 - u) * 0.07));
+        const tone = (arm + i) % 3;
+        if (tone === 0) {
+          blob.addColorStop(0, `rgba(255,90,200,${0.55 - u * 0.35})`);
+          blob.addColorStop(0.45, `rgba(160,40,180,${0.28 - u * 0.15})`);
+        } else if (tone === 1) {
+          blob.addColorStop(0, `rgba(170,70,255,${0.5 - u * 0.3})`);
+          blob.addColorStop(0.45, `rgba(70,20,140,${0.26 - u * 0.14})`);
+        } else {
+          blob.addColorStop(0, `rgba(90,110,255,${0.42 - u * 0.25})`);
+          blob.addColorStop(0.45, `rgba(20,30,90,${0.22 - u * 0.12})`);
+        }
+        blob.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = blob;
+        ctx.beginPath();
+        ctx.arc(x, y, s * (0.05 + (1 - u) * 0.08), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Dark voids for contrast (sinister depth)
+    for (let i = 0; i < 18; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const rad = s * (0.12 + Math.random() * 0.32);
+      const x = c + Math.cos(ang) * rad;
+      const y = c + Math.sin(ang) * rad;
+      const voidGrad = ctx.createRadialGradient(x, y, 0, x, y, s * (0.04 + Math.random() * 0.06));
+      voidGrad.addColorStop(0, "rgba(0,0,0,0.85)");
+      voidGrad.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = voidGrad;
+      ctx.beginPath();
+      ctx.arc(x, y, s * 0.08, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Hot magenta core flare
+    const core = ctx.createRadialGradient(c, c, 0, c, c, s * 0.14);
+    core.addColorStop(0, "rgba(255,210,255,0.95)");
+    core.addColorStop(0.25, "rgba(255,80,190,0.7)");
+    core.addColorStop(0.6, "rgba(120,20,160,0.25)");
+    core.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = core;
+    ctx.fillRect(0, 0, s, s);
+
+    // Sparkling dust
+    for (let i = 0; i < 420; i++) {
+      const x = Math.random() * s;
+      const y = Math.random() * s;
+      const dx = x - c;
+      const dy = y - c;
+      if (dx * dx + dy * dy > (s * 0.48) * (s * 0.48)) {
+        continue;
+      }
+      const bright = Math.random();
+      const a = 0.25 + bright * 0.75;
+      if (bright > 0.82) {
+        ctx.fillStyle = `rgba(230,240,255,${a})`;
+      } else if (bright > 0.55) {
+        ctx.fillStyle = `rgba(255,160,230,${a * 0.85})`;
+      } else {
+        ctx.fillStyle = `rgba(160,140,255,${a * 0.7})`;
+      }
+      const sz = bright > 0.9 ? 1.6 : 0.7 + Math.random() * 1.1;
+      ctx.fillRect(x, y, sz, sz);
+    }
+  }, size);
+}
+
+function nebulaShellMat(map: THREE.Texture, tint: number, opacity: number): THREE.MeshBasicMaterial {
+  return new THREE.MeshBasicMaterial({
+    map,
+    color: tint,
+    transparent: true,
+    opacity,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.AdditiveBlending,
+    side: THREE.FrontSide,
+  });
+}
+
 function buildDestroyer(r: number): FantasyBuild {
   const globe = new THREE.Mesh(
     new THREE.SphereGeometry(r, 48, 36),
     solid({
-      color: 0x2a2a32,
-      roughness: 0.55,
-      metalness: 0.35,
-      emissive: 0x101018,
-      emissiveIntensity: 0.25,
+      color: 0x0e0c12,
+      roughness: 0.78,
+      metalness: 0.22,
+      emissive: 0x14061c,
+      emissiveIntensity: 0.22,
     }),
   );
   const adornments: THREE.Object3D[] = [];
   const trench = new THREE.Mesh(
     new THREE.TorusGeometry(r * 0.92, r * 0.08, 8, 48),
-    solid({ color: 0x484858, roughness: 0.4, metalness: 0.5, emissive: 0x202028, emissiveIntensity: 0.4 }),
+    solid({ color: 0x221828, roughness: 0.55, metalness: 0.35, emissive: 0x1a0828, emissiveIntensity: 0.35 }),
   );
   trench.rotation.x = Math.PI / 2;
   adornments.push(trench);
   const dish = new THREE.Mesh(
     new THREE.CylinderGeometry(r * 0.35, r * 0.42, r * 0.12, 24),
-    solid({ color: 0x606070, metalness: 0.6, roughness: 0.3, emissive: 0x303040, emissiveIntensity: 0.5 }),
+    solid({ color: 0x2a2230, metalness: 0.4, roughness: 0.42, emissive: 0x1c0a2a, emissiveIntensity: 0.32 }),
   );
   dish.position.set(0, r * 0.55, 0);
   adornments.push(dish);
-  return { globe, adornments };
+
+  const nebula = ominousNebulaTexture(512);
+  nebula.colorSpace = THREE.SRGBColorSpace;
+  nebula.wrapS = THREE.RepeatWrapping;
+  nebula.wrapT = THREE.RepeatWrapping;
+  const softTex = softGlowTexture();
+  const destroyerAura = new THREE.Group();
+  destroyerAura.name = "destroyerAura";
+
+  const skin = new THREE.Mesh(
+    new THREE.SphereGeometry(r * 1.06, 48, 32),
+    nebulaShellMat(nebula, 0xffffff, 0.55),
+  );
+  skin.userData.spin = 0.18;
+  destroyerAura.add(skin);
+
+  const veil = new THREE.Mesh(
+    new THREE.SphereGeometry(r * 1.2, 40, 28),
+    nebulaShellMat(nebula, 0xc090ff, 0.32),
+  );
+  veil.rotation.y = 1.1;
+  veil.rotation.z = 0.4;
+  veil.userData.spin = -0.11;
+  destroyerAura.add(veil);
+
+  const haze = new THREE.Mesh(
+    new THREE.SphereGeometry(r * 1.38, 32, 24),
+    nebulaShellMat(nebula, 0x6080ff, 0.18),
+  );
+  haze.rotation.y = 2.2;
+  haze.userData.spin = 0.07;
+  destroyerAura.add(haze);
+
+  const rim = new THREE.Mesh(
+    new THREE.SphereGeometry(r * 1.02, 36, 24),
+    new THREE.MeshBasicMaterial({
+      map: nebula,
+      color: 0xff66cc,
+      transparent: true,
+      opacity: 0.2,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.BackSide,
+    }),
+  );
+  rim.userData.spin = -0.22;
+  destroyerAura.add(rim);
+
+  // Multi-hue spark field wrapping the body + wake
+  const sparkCount = 120;
+  const sparkPos = new Float32Array(sparkCount * 3);
+  const sparkCol = new Float32Array(sparkCount * 3);
+  for (let i = 0; i < sparkCount; i++) {
+    const wrap = i < 70;
+    if (wrap) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const rad = r * (1.02 + Math.random() * 0.28);
+      sparkPos[i * 3] = rad * Math.sin(phi) * Math.cos(theta);
+      sparkPos[i * 3 + 1] = rad * Math.cos(phi);
+      sparkPos[i * 3 + 2] = rad * Math.sin(phi) * Math.sin(theta);
+    } else {
+      const t = Math.random();
+      const ang = Math.random() * Math.PI * 2;
+      const rad = r * (0.4 + Math.random() * 0.7);
+      sparkPos[i * 3] = Math.cos(ang) * rad;
+      sparkPos[i * 3 + 1] = Math.sin(ang) * rad * 0.7;
+      sparkPos[i * 3 + 2] = -r * (0.3 + t * 2.8);
+    }
+    const tone = Math.random();
+    if (tone > 0.7) {
+      sparkCol[i * 3] = 1;
+      sparkCol[i * 3 + 1] = 0.85;
+      sparkCol[i * 3 + 2] = 1;
+    } else if (tone > 0.35) {
+      sparkCol[i * 3] = 1;
+      sparkCol[i * 3 + 1] = 0.35;
+      sparkCol[i * 3 + 2] = 0.75;
+    } else {
+      sparkCol[i * 3] = 0.45;
+      sparkCol[i * 3 + 1] = 0.4;
+      sparkCol[i * 3 + 2] = 1;
+    }
+  }
+  const sparkGeo = new THREE.BufferGeometry();
+  sparkGeo.setAttribute("position", new THREE.BufferAttribute(sparkPos, 3));
+  sparkGeo.setAttribute("color", new THREE.BufferAttribute(sparkCol, 3));
+  const sparks = new THREE.Points(
+    sparkGeo,
+    new THREE.PointsMaterial({
+      map: softTex,
+      vertexColors: true,
+      size: r * 0.09,
+      transparent: true,
+      opacity: 0.7,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true,
+    }),
+  );
+  destroyerAura.add(sparks);
+
+  return { globe, adornments, destroyerAura };
 }
 
 function buildBrick(r: number): FantasyBuild {
@@ -559,6 +1179,233 @@ function buildTakoyaki(r: number): FantasyBuild {
   return { globe, adornments };
 }
 
+function buildGaming(r: number): FantasyBuild {
+  const map = gamingMap();
+  const globe = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 40, 28),
+    solid({
+      map,
+      color: 0xffffff,
+      emissive: 0x39ff14,
+      emissiveIntensity: 0.95,
+      roughness: 0.35,
+      metalness: 0.25,
+    }),
+  );
+  return { globe };
+}
+
+function buildBubble(r: number): FantasyBuild {
+  const map = bubbleMap();
+  const globe = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 40, 28),
+    solid({
+      map,
+      color: 0xffffff,
+      roughness: 0.1,
+      metalness: 0.2,
+      transparent: true,
+      opacity: 0.42,
+      envMapIntensity: 1.2,
+    }),
+  );
+  const rings = new THREE.Mesh(
+    new THREE.RingGeometry(r * 1.18, r * 1.52, 48),
+    new THREE.MeshStandardMaterial({
+      map,
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.45,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      roughness: 0.28,
+      metalness: 0.15,
+    }),
+  );
+  rings.rotation.x = Math.PI * 0.42;
+  return { globe, rings };
+}
+
+function buildThunder(r: number): FantasyBuild {
+  const map = thunderAlbedoMap();
+  const emissiveMap = thunderEmissiveMap();
+  const globe = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 40, 28),
+    solid({
+      map,
+      color: 0xffffff,
+      roughness: 0.55,
+      metalness: 0.35,
+      emissive: 0xc8b0ff,
+      emissiveMap,
+      emissiveIntensity: 0.6,
+    }),
+  );
+  return { globe };
+}
+
+function buildRelic(r: number): FantasyBuild {
+  return {
+    globe: new THREE.Mesh(
+      new THREE.SphereGeometry(r, 40, 28),
+      solid({ color: 0xf07828, roughness: 0.42, metalness: 0.04 }),
+    ),
+  };
+}
+
+function buildSparkle(r: number): FantasyBuild {
+  const map = sparkleMap();
+  const softTex = softGlowTexture();
+  const globe = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 40, 28),
+    solid({
+      map,
+      color: 0xffffff,
+      roughness: 0.14,
+      metalness: 0.95,
+      emissive: 0xffe090,
+      emissiveIntensity: 0.35,
+      envMapIntensity: 1.6,
+    }),
+  );
+  const count = 36;
+  const pos = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const phi = Math.acos(1 - 2 * ((i + 0.5) / count));
+    const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+    const dist = r * (1.02 + (i % 4) * 0.04);
+    pos[i * 3] = Math.sin(phi) * Math.cos(theta) * dist;
+    pos[i * 3 + 1] = Math.cos(phi) * dist;
+    pos[i * 3 + 2] = Math.sin(phi) * Math.sin(theta) * dist;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  const glints = new THREE.Points(
+    geo,
+    new THREE.PointsMaterial({
+      map: softTex,
+      color: 0xfff4c8,
+      size: r * 0.12,
+      transparent: true,
+      opacity: 0.75,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true,
+    }),
+  );
+  return { globe, adornments: [glints] };
+}
+
+function buildVoidseed(r: number): FantasyBuild {
+  const map = voidseedMap();
+  const globe = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 24, 16),
+    solid({
+      map,
+      color: 0xffffff,
+      roughness: 1,
+      metalness: 0.45,
+      emissive: 0x2a0830,
+      emissiveIntensity: 0.4,
+    }),
+  );
+  const adornments: THREE.Object3D[] = [];
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(r * 1.15, r * 0.045, 8, 48),
+    solid({
+      color: 0x6a3080,
+      roughness: 0.4,
+      metalness: 0.5,
+      emissive: 0x4a1860,
+      emissiveIntensity: 0.55,
+    }),
+  );
+  ring.rotation.x = Math.PI / 2.4;
+  adornments.push(ring);
+  const halo = new THREE.Mesh(
+    new THREE.SphereGeometry(r * 1.25, 20, 14),
+    new THREE.MeshBasicMaterial({
+      color: 0x3a1060,
+      transparent: true,
+      opacity: 0.16,
+      depthWrite: false,
+      side: THREE.BackSide,
+      blending: THREE.AdditiveBlending,
+    }),
+  );
+  adornments.push(halo);
+  return { globe, adornments };
+}
+
+function buildGlass(r: number): FantasyBuild {
+  const map = glassMap();
+  const globe = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 40, 28),
+    solid({
+      map,
+      color: 0xffffff,
+      roughness: 0.06,
+      metalness: 0.55,
+      transparent: true,
+      opacity: 0.72,
+      envMapIntensity: 1.6,
+    }),
+  );
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(r * 0.42, 20, 14),
+    solid({
+      color: 0xa8d8ec,
+      roughness: 0.2,
+      metalness: 0.3,
+      transparent: true,
+      opacity: 0.55,
+      emissive: 0x6088a0,
+      emissiveIntensity: 0.12,
+    }),
+  );
+  return { globe, adornments: [core] };
+}
+
+function buildDrowsy(r: number): FantasyBuild {
+  const map = drowsyMap();
+  const globe = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 32, 22),
+    solid({
+      map,
+      color: 0xffffff,
+      roughness: 1,
+      metalness: 0,
+      emissive: 0x101018,
+      emissiveIntensity: 0.08,
+    }),
+  );
+  const adornments: THREE.Object3D[] = [];
+  const lidMat = solid({ color: 0x1a1e28, roughness: 0.9 });
+  const makeLid = (x: number) => {
+    const lid = new THREE.Mesh(new THREE.SphereGeometry(r * 0.16, 10, 8), lidMat);
+    lid.scale.set(1.15, 0.28, 0.55);
+    lid.position.set(x, r * 0.18, r * 0.82);
+    return lid;
+  };
+  adornments.push(makeLid(-r * 0.28));
+  adornments.push(makeLid(r * 0.28));
+  // Soft cheek blush — tiny spheres, not sprites
+  const blushMat = solid({
+    color: 0x5a4060,
+    roughness: 1,
+    transparent: true,
+    opacity: 0.35,
+    depthWrite: false,
+  });
+  for (const x of [-r * 0.48, r * 0.48]) {
+    const blush = new THREE.Mesh(new THREE.SphereGeometry(r * 0.12, 8, 6), blushMat);
+    blush.scale.set(1, 0.7, 0.5);
+    blush.position.set(x, -r * 0.05, r * 0.75);
+    adornments.push(blush);
+  }
+  return { globe, adornments };
+}
+
 export function buildFantasyGlobe(
   body: Body,
   textures: FantasyTextures,
@@ -591,35 +1438,13 @@ export function buildFantasyGlobe(
     return buildTakoyaki(r);
   }
   if (id === "relic") {
-    return {
-      globe: new THREE.Mesh(
-        new THREE.SphereGeometry(r, 40, 28),
-        solid({ color: 0xf07828, roughness: 0.42, metalness: 0.04 }),
-      ),
-    };
+    return buildRelic(r);
   }
   if (id === "gaming") {
-    return {
-      globe: new THREE.Mesh(
-        new THREE.SphereGeometry(r, 40, 28),
-        solid({ color: 0x18181c, emissive: 0x39ff14, emissiveIntensity: 0.95, roughness: 0.35, metalness: 0.2 }),
-      ),
-    };
+    return buildGaming(r);
   }
   if (id === "glass") {
-    return {
-      globe: new THREE.Mesh(
-        new THREE.SphereGeometry(r, 40, 28),
-        solid({
-          color: 0xc8e8f8,
-          roughness: 0.08,
-          metalness: 0.75,
-          transparent: true,
-          opacity: 0.78,
-          envMapIntensity: 1.5,
-        }),
-      ),
-    };
+    return buildGlass(r);
   }
   if (id === "mirror") {
     return {
@@ -668,53 +1493,16 @@ export function buildFantasyGlobe(
     };
   }
   if (id === "bubble") {
-    const globe = new THREE.Mesh(
-      new THREE.SphereGeometry(r, 40, 28),
-      solid({
-        color: 0xb8e0f0,
-        roughness: 0.12,
-        metalness: 0.25,
-        transparent: true,
-        opacity: 0.38,
-      }),
-    );
-    const rings = new THREE.Mesh(
-      new THREE.RingGeometry(r * 1.2, r * 1.5, 48),
-      new THREE.MeshStandardMaterial({
-        color: 0xe8f8ff,
-        transparent: true,
-        opacity: 0.4,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        roughness: 0.35,
-      }),
-    );
-    rings.rotation.x = Math.PI * 0.42;
-    return { globe, rings };
+    return buildBubble(r);
   }
   if (id === "voidseed") {
-    return {
-      globe: new THREE.Mesh(
-        new THREE.SphereGeometry(r, 20, 14),
-        solid({ color: 0x0a0610, roughness: 1, metalness: 0.4, emissive: 0x2a0830, emissiveIntensity: 0.35 }),
-      ),
-    };
+    return buildVoidseed(r);
   }
   if (id === "sparkle") {
-    return {
-      globe: new THREE.Mesh(
-        new THREE.SphereGeometry(r, 40, 28),
-        solid({ color: 0xfff6d0, roughness: 0.12, metalness: 1, emissive: 0xffe090, emissiveIntensity: 0.45 }),
-      ),
-    };
+    return buildSparkle(r);
   }
   if (id === "drowsy") {
-    return {
-      globe: new THREE.Mesh(
-        new THREE.SphereGeometry(r, 32, 22),
-        solid({ color: 0x2a3040, roughness: 1, metalness: 0, emissive: 0x101018, emissiveIntensity: 0.06 }),
-      ),
-    };
+    return buildDrowsy(r);
   }
   if (id === "puddle") {
     const globe = new THREE.Mesh(
@@ -731,12 +1519,7 @@ export function buildFantasyGlobe(
     return { globe };
   }
   if (id === "thunder") {
-    return {
-      globe: new THREE.Mesh(
-        new THREE.SphereGeometry(r, 40, 28),
-        solid({ color: 0x282038, roughness: 0.4, metalness: 0.45, emissive: 0xc8b0ff, emissiveIntensity: 0.6 }),
-      ),
-    };
+    return buildThunder(r);
   }
   if (id === "crumbly") {
     return {

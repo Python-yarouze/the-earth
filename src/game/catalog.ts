@@ -61,7 +61,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "crumbly", label: "ぼこぼこ", kind: "planet", mass: 1.1, size: 0.72, spin: 0.7, obliquity: 40, swatch: "#9a8a70" },
   { id: "sideslip", label: "よこすべり", kind: "planet", mass: 3.2, size: 0.9, spin: 0.45, obliquity: 78, swatch: "#70a090" },
   { id: "relic", label: "ピンポン", kind: "planet", mass: 6.5, size: 0.5, spin: 0.2, obliquity: 15, swatch: "#f07828" },
-  { id: "destroyer", label: "破壊星", kind: "planet", mass: 12000, size: 2.2, spin: 0.04, obliquity: 0, swatch: "#303038" },
+  { id: "destroyer", label: "破壊星", kind: "planet", mass: 12000, size: 5.0, spin: 0.04, obliquity: 0, swatch: "#303038" },
 ];
 
 /** Real solar-system stones (gates the solar preset unlock). */

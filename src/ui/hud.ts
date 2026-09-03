@@ -26,6 +26,7 @@ import type { AppearanceId, Body } from "../physics/body";
 import {
   CREDITS_BUTTON_OPACITY,
   CREDIT_SECTIONS,
+  CREDITS_SCROLL_DELAY_SEC,
   CREDITS_SCROLL_SEC,
   creditsScrollDurationSec,
   creditsScrollEndPct,
@@ -84,7 +85,7 @@ function creditsPanel(showSkip: boolean): string {
     ? `<button type="button" class="credits-skip" data-act="finale-skip" aria-label="エンドクレジットをスキップ">スキップ</button>`
     : "";
   return `${skip}<div class="credits-roll" aria-live="polite" style="--credits-btn-opacity: ${CREDITS_BUTTON_OPACITY}">
-    <div class="credits-scroll rolling">${blocks}</div>
+    <div class="credits-scroll">${blocks}</div>
     <div class="credits-epilogue" aria-live="polite" aria-hidden="true">
       <p class="credits-epilogue-line"></p>
     </div>
@@ -612,13 +613,17 @@ export class Hud {
     return Number(roll.dataset.scrollSec) || CREDITS_SCROLL_SEC;
   }
 
-  /** Advance credits phases: scroll → epilogue → thank-you → subtle button. */
+  /** Advance credits phases: delay → scroll → epilogue → thank-you → subtle button. */
   updateFinaleCredits(elapsed: number, sunExplodedAt: number | null = null): void {
     const roll = this.root.querySelector<HTMLElement>(".credits-roll");
     if (!roll) {
       return;
     }
     const scrollSec = this.layoutFinaleCredits(roll);
+    const scroll = roll.querySelector<HTMLElement>(".credits-scroll");
+    if (scroll && elapsed >= CREDITS_SCROLL_DELAY_SEC) {
+      scroll.classList.add("rolling");
+    }
     const phase = finaleCreditsPhase(elapsed, scrollSec, sunExplodedAt);
     roll.classList.toggle("credits-phase-thanks", phase === "thanks" || phase === "button");
     roll.classList.toggle("credits-phase-button", phase === "button");

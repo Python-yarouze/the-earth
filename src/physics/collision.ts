@@ -1,7 +1,7 @@
 import { applyRadius, createBody, type Body } from "./body";
 import { DESTROY_SPEED, MERGE_SPEED, SIZE_MAX, SIZE_MIN, SUN_MASS } from "./constants";
 import { reseatMoon } from "./engine";
-import { add, dist, length, normalize, scale, sub, vec3 } from "./vec3";
+import { add, cross, dist, dot, length, normalize, scale, sub, vec3, type Vec3 } from "./vec3";
 
 export type CollisionKind =
   | "merge"
@@ -143,26 +143,63 @@ function spawnDebris(bodies: Body[], source: Body, other: Body, rel: number): vo
   }
   const budget = Math.min(MAX_DEBRIS - ephemeral, DEBRIS_COUNT);
   const chunk = Math.max(0.002, source.mass / (budget + 1));
-  const away = normalize(sub(source.pos, other.pos));
-  const side = length(away) < 1e-6 ? vec3(0, 1, 0) : away;
+  const speed = 10 + rel * 0.08;
   for (let i = 0; i < budget; i++) {
-    const ang = (i / budget) * Math.PI * 2;
-    const kick = add(
-      scale(side, 8 + rel * 0.05),
-      vec3(Math.cos(ang) * 12, (Math.random() - 0.5) * 10, Math.sin(ang) * 12),
-    );
+    const kick = reflectedDebrisKick(source, other, speed * (0.75 + Math.random() * 0.5));
     const piece = createBody({
       kind: "meteor",
       appearance: "asteroid",
       mass: chunk,
       size: 0.28,
       pos: add(source.pos, scale(normalize(kick), source.radius + 1.2)),
-      vel: add(source.vel, kick),
+      vel: add(other.vel, kick),
       spin: 1.4,
       ephemeral: true,
     });
     bodies.push(piece);
   }
+}
+
+/**
+ * Bounce-style debris kick: reflect victim relative velocity off the contact normal,
+ * then add a cone of jitter so shards fan away from the collider rather than along travel.
+ */
+export function reflectedDebrisKick(
+  victim: Body,
+  other: Body,
+  speed: number,
+  rng: () => number = Math.random,
+): Vec3 {
+  let n = normalize(sub(victim.pos, other.pos));
+  if (length(n) < 1e-6) {
+    n = vec3(1, 0, 0);
+  }
+  const vRel = sub(victim.vel, other.vel);
+  let vOut = vRel;
+  const vn = dot(vRel, n);
+  if (vn < 0) {
+    vOut = sub(vRel, scale(n, 2 * vn));
+  }
+  if (length(vOut) < 1e-3) {
+    vOut = n;
+  }
+  vOut = normalize(vOut);
+  // Prefer the outward hemisphere if reflection still points into the collider.
+  if (dot(vOut, n) < 0.15) {
+    vOut = normalize(add(vOut, scale(n, 0.85)));
+  }
+  let tangent = cross(vOut, vec3(0, 1, 0));
+  if (length(tangent) < 1e-4) {
+    tangent = cross(vOut, vec3(1, 0, 0));
+  }
+  tangent = normalize(tangent);
+  const bitangent = normalize(cross(vOut, tangent));
+  const spread = 0.55;
+  const jitter = add(
+    scale(tangent, (rng() - 0.5) * 2 * spread),
+    scale(bitangent, (rng() - 0.5) * 2 * spread),
+  );
+  return scale(normalize(add(vOut, jitter)), Math.max(0.5, speed));
 }
 
 function withinSwallow(hole: Body, other: Body): boolean {

@@ -28,6 +28,7 @@ export {
   collidingPair,
   collisionCopy,
   isBlackHole,
+  reflectedDebrisKick,
   relativeSpeed,
   resolveCollisions,
   type CollisionEvent,

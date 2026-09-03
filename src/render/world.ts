@@ -16,7 +16,7 @@ import {
   intersectHorizontal,
   physicsToWorld,
 } from "./camera";
-import { setupFinaleCamera } from "./cinema";
+import { setupFinaleCamera, updateFinaleCamera } from "./cinema";
 import type { FinaleState } from "../game/finale";
 import { addStarfield } from "./stars";
 import { TrailField } from "./trails";
@@ -100,6 +100,8 @@ export class World {
   private readonly ambientBase = 0.28;
   private readonly ambientBaseColor = new THREE.Color(0x7a8aa8);
   private finaleActive = false;
+  private finaleState: FinaleState | null = null;
+  private lastFinaleBodies: readonly Body[] = [];
   private savedDamping = true;
   private savedAmbient = 0.28;
 
@@ -236,6 +238,8 @@ export class World {
   /** Scripted finale shot: hide build aids, lock auto-rotate, brighten fill light. */
   enterFinale(state: FinaleState, bodies: readonly Body[]): void {
     this.finaleActive = true;
+    this.finaleState = state;
+    this.lastFinaleBodies = bodies;
     this.watching = true;
     this.povFocus = null;
     this.povFocusId = null;
@@ -257,9 +261,16 @@ export class World {
 
   exitFinale(): void {
     this.finaleActive = false;
+    this.finaleState = null;
+    this.lastFinaleBodies = [];
     this.controls.enableDamping = this.savedDamping;
     this.controls.autoRotate = false;
     this.ambient.intensity = this.savedAmbient;
+    this.controls.minDistance = DEFAULT_MIN_DISTANCE;
+    this.controls.maxDistance = DEFAULT_MAX_DISTANCE;
+    this.camera.near = 0.5;
+    this.camera.far = 4000;
+    this.camera.updateProjectionMatrix();
     this.trails.reset();
   }
 
@@ -274,6 +285,9 @@ export class World {
   }
 
   syncBodies(bodies: readonly Body[]): void {
+    if (this.finaleActive) {
+      this.lastFinaleBodies = bodies;
+    }
     this.lastBodies = bodies;
     const ids = new Set(bodies.map((b) => b.id));
     for (const [id, view] of this.views) {
@@ -556,22 +570,54 @@ export class World {
     this.clearShip();
     const g = new THREE.Group();
     const hull = new THREE.Mesh(
-      new THREE.ConeGeometry(0.7, 4.2, 6),
+      new THREE.ConeGeometry(0.85, 5.2, 7),
       new THREE.MeshStandardMaterial({
-        color: 0xd8dde4,
-        metalness: 0.4,
-        roughness: 0.35,
-        emissive: 0x8899aa,
-        emissiveIntensity: 0.35,
+        color: 0xd4dae2,
+        metalness: 0.55,
+        roughness: 0.32,
+        emissive: 0x6a7888,
+        emissiveIntensity: 0.28,
       }),
     );
     hull.rotation.x = Math.PI / 2;
     const cabin = new THREE.Mesh(
-      new THREE.SphereGeometry(0.55, 8, 6),
-      new THREE.MeshStandardMaterial({ color: 0x8ec8ff, emissive: 0x226688, emissiveIntensity: 0.5 }),
+      new THREE.SphereGeometry(0.62, 10, 8),
+      new THREE.MeshStandardMaterial({
+        color: 0x9ed0ff,
+        metalness: 0.2,
+        roughness: 0.25,
+        emissive: 0x2a7098,
+        emissiveIntensity: 0.65,
+      }),
     );
-    cabin.position.z = 0.4;
-    g.add(hull, cabin);
+    cabin.position.z = 0.55;
+    const finMat = new THREE.MeshStandardMaterial({
+      color: 0xb0b8c4,
+      metalness: 0.4,
+      roughness: 0.4,
+      emissive: 0x445566,
+      emissiveIntensity: 0.2,
+    });
+    for (const side of [-1, 1]) {
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.4, 0.55), finMat);
+      fin.position.set(side * 0.85, 0, -0.6);
+      fin.rotation.z = side * 0.35;
+      g.add(fin);
+    }
+    const exhaust = new THREE.Mesh(
+      new THREE.ConeGeometry(0.35, 1.8, 8, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0x66ccff,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      }),
+    );
+    exhaust.rotation.x = -Math.PI / 2;
+    exhaust.position.z = -2.6;
+    g.add(hull, cabin, exhaust);
     this.ship = g;
     this.shipFrom.set(from.x, from.y, from.z);
     this.shipTo.set(to.x, to.y, to.z);
@@ -616,6 +662,15 @@ export class World {
     this.controls.update();
     if (this.finaleActive) {
       this.controls.autoRotate = false;
+      if (this.finaleState) {
+        updateFinaleCamera(
+          this.finaleState,
+          this.camera,
+          this.controls,
+          this.lastFinaleBodies,
+          performance.now(),
+        );
+      }
     } else if (this.povFocus) {
       this.anchorBodyPov(this.povFocus);
     }

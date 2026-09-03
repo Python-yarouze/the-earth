@@ -2,7 +2,7 @@ import * as THREE from "three";
 import type { AppearanceId, Body } from "../physics/body";
 import { FANTASY_PLACEABLE_IDS } from "../game/catalog";
 import { physicsToWorld } from "./camera";
-import { buildFantasyGlobe, syncClockHands, type ClockHands } from "./fantasy";
+import { buildFantasyGlobe, syncClockHands, syncEmberAura, type ClockHands } from "./fantasy";
 
 export interface BodyTextures {
   sun: THREE.Texture;
@@ -61,7 +61,7 @@ const DRAW: Record<AppearanceId, number> = {
   crumbly: 3.4,
   sideslip: 2.9,
   relic: 2.0,
-  destroyer: 0.45,
+  destroyer: 0.55,
 };
 
 const MIN_R: Partial<Record<AppearanceId, number>> = {
@@ -84,7 +84,7 @@ const MIN_R: Partial<Record<AppearanceId, number>> = {
   puddle: 5.2,
   crumbly: 4.0,
   relic: 2.8,
-  destroyer: 48,
+  destroyer: 90,
 };
 
 const FANTASY_SET = new Set<string>([...FANTASY_PLACEABLE_IDS, "destroyer"]);
@@ -93,6 +93,247 @@ export function visualRadius(body: Body): number {
   const draw = DRAW[body.appearance] ?? 3;
   const min = body.kind === "sun" ? 18 : (MIN_R[body.appearance] ?? 5.2);
   return Math.max(body.radius * draw, min);
+}
+
+function softPointTexture(size = 64): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    const c = size / 2;
+    const g = ctx.createRadialGradient(c, c, 0, c, c, c);
+    g.addColorStop(0, "rgba(255,255,255,1)");
+    g.addColorStop(0.35, "rgba(255,255,255,0.55)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+  }
+  const map = new THREE.CanvasTexture(canvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  return map;
+}
+
+function rockMap(kind: "asteroid" | "meteor"): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  const size = 256;
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = kind === "meteor" ? "#3a342e" : "#6a6054";
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 80; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const rad = 4 + Math.random() * 18;
+    const shade = kind === "meteor" ? 40 + Math.random() * 35 : 70 + Math.random() * 50;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
+    g.addColorStop(0, `rgba(${shade + 20},${shade - 5},${shade - 20},0.55)`);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, rad, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (kind === "meteor") {
+    for (let i = 0; i < 12; i++) {
+      ctx.strokeStyle = `rgba(255,${120 + Math.random() * 80},40,${0.25 + Math.random() * 0.35})`;
+      ctx.lineWidth = 1 + Math.random() * 2;
+      ctx.beginPath();
+      ctx.moveTo(Math.random() * size, Math.random() * size);
+      ctx.lineTo(Math.random() * size, Math.random() * size);
+      ctx.stroke();
+    }
+  }
+  const map = new THREE.CanvasTexture(canvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = 4;
+  return map;
+}
+
+function icyCometMap(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  const size = 256;
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#c8d8e8";
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 40; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, 8 + Math.random() * 20);
+    g.addColorStop(0, `rgba(255,255,255,${0.4 + Math.random() * 0.4})`);
+    g.addColorStop(0.5, `rgba(160,200,230,${0.25})`);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, 24, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const map = new THREE.CanvasTexture(canvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  return map;
+}
+
+function lumpyRockGeometry(r: number, detail: number, lump: number): THREE.BufferGeometry {
+  const geo = new THREE.IcosahedronGeometry(r, detail);
+  const pos = geo.attributes.position;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const n = 1 + lump * Math.sin(i * 12.7) * Math.cos(i * 5.3);
+    v.multiplyScalar(n);
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
+type DebrisBuild = { globe: THREE.Mesh; motionAura?: THREE.Group };
+
+function buildDebrisBody(appearance: AppearanceId, r: number): DebrisBuild {
+  const soft = softPointTexture();
+  if (appearance === "comet") {
+    const globe = new THREE.Mesh(
+      lumpyRockGeometry(r * 0.85, 2, 0.08),
+      new THREE.MeshStandardMaterial({
+        map: icyCometMap(),
+        color: 0xffffff,
+        roughness: 0.45,
+        metalness: 0.08,
+        emissive: 0x6a98b8,
+        emissiveIntensity: 0.35,
+      }),
+    );
+    const motionAura = new THREE.Group();
+    motionAura.name = "motionAura";
+    const coma = new THREE.Mesh(
+      new THREE.SphereGeometry(r * 1.55, 20, 14),
+      new THREE.MeshBasicMaterial({
+        color: 0xa8d8f0,
+        transparent: true,
+        opacity: 0.28,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    motionAura.add(coma);
+    const ion = new THREE.Mesh(
+      new THREE.ConeGeometry(r * 0.55, r * 5.5, 16, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0x88c8ff,
+        transparent: true,
+        opacity: 0.32,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      }),
+    );
+    ion.rotation.x = Math.PI / 2;
+    ion.position.z = -r * 2.6;
+    motionAura.add(ion);
+    const dustCount = 60;
+    const dustPos = new Float32Array(dustCount * 3);
+    for (let i = 0; i < dustCount; i++) {
+      const t = i / dustCount;
+      const spread = r * (0.2 + t * 1.1);
+      const ang = i * 1.7;
+      dustPos[i * 3] = Math.cos(ang) * spread;
+      dustPos[i * 3 + 1] = Math.sin(ang * 1.3) * spread * 0.55;
+      dustPos[i * 3 + 2] = -r * (0.4 + t * 5.2);
+    }
+    const dustGeo = new THREE.BufferGeometry();
+    dustGeo.setAttribute("position", new THREE.BufferAttribute(dustPos, 3));
+    motionAura.add(
+      new THREE.Points(
+        dustGeo,
+        new THREE.PointsMaterial({
+          map: soft,
+          color: 0xd0e8ff,
+          size: r * 0.22,
+          transparent: true,
+          opacity: 0.55,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          sizeAttenuation: true,
+        }),
+      ),
+    );
+    return { globe, motionAura };
+  }
+
+  if (appearance === "meteor") {
+    const globe = new THREE.Mesh(
+      lumpyRockGeometry(r, 1, 0.16),
+      new THREE.MeshStandardMaterial({
+        map: rockMap("meteor"),
+        color: 0xffffff,
+        roughness: 0.92,
+        metalness: 0.12,
+        emissive: 0x4a2010,
+        emissiveIntensity: 0.45,
+        flatShading: true,
+      }),
+    );
+    globe.scale.set(1, 0.78, 0.9);
+    const motionAura = new THREE.Group();
+    motionAura.name = "motionAura";
+    const streak = new THREE.Mesh(
+      new THREE.ConeGeometry(r * 0.35, r * 2.8, 10, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0xff8844,
+        transparent: true,
+        opacity: 0.4,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      }),
+    );
+    streak.rotation.x = Math.PI / 2;
+    streak.position.z = -r * 1.4;
+    motionAura.add(streak);
+    const sparkCount = 24;
+    const sparkPos = new Float32Array(sparkCount * 3);
+    for (let i = 0; i < sparkCount; i++) {
+      const t = Math.random();
+      sparkPos[i * 3] = (Math.random() - 0.5) * r * 0.6;
+      sparkPos[i * 3 + 1] = (Math.random() - 0.5) * r * 0.6;
+      sparkPos[i * 3 + 2] = -r * (0.3 + t * 2.4);
+    }
+    const sparkGeo = new THREE.BufferGeometry();
+    sparkGeo.setAttribute("position", new THREE.BufferAttribute(sparkPos, 3));
+    motionAura.add(
+      new THREE.Points(
+        sparkGeo,
+        new THREE.PointsMaterial({
+          map: soft,
+          color: 0xffc070,
+          size: r * 0.14,
+          transparent: true,
+          opacity: 0.65,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          sizeAttenuation: true,
+        }),
+      ),
+    );
+    return { globe, motionAura };
+  }
+
+  // asteroid
+  const globe = new THREE.Mesh(
+    lumpyRockGeometry(r, 2, 0.14),
+    new THREE.MeshStandardMaterial({
+      map: rockMap("asteroid"),
+      color: 0xffffff,
+      roughness: 0.96,
+      metalness: 0.04,
+      flatShading: true,
+    }),
+  );
+  globe.scale.set(1.05, 0.82, 0.92);
+  return { globe };
 }
 
 function tex(loader: THREE.TextureLoader, url: string): Promise<THREE.Texture> {
@@ -275,6 +516,10 @@ export class BodyView {
   private discoballGlow?: THREE.Sprite;
   private discoballBokeh?: THREE.Points;
   private clockHands?: ClockHands;
+  private destroyerAura?: THREE.Group;
+  private emberAura?: THREE.Group;
+  private motionAura?: THREE.Group;
+  private emberMat?: THREE.MeshStandardMaterial;
   private noteFlashUntil = 0;
   private noteFlashDur = 0.22;
   private noteFlashBase = 0;
@@ -352,19 +597,13 @@ export class BodyView {
       this.corona = halo;
       this.group.add(this.globe, halo);
     } else if (body.kind === "meteor" || body.appearance === "asteroid" || body.appearance === "comet") {
-      const color = body.appearance === "comet" ? 0xa8c4d8 : 0x5a5048;
-      this.globe = new THREE.Mesh(
-        new THREE.SphereGeometry(r, 10, 8),
-        new THREE.MeshStandardMaterial({
-          color,
-          roughness: 1,
-          metalness: 0.05,
-          emissive: body.appearance === "comet" ? 0x335566 : 0x000000,
-          emissiveIntensity: body.appearance === "comet" ? 0.2 : 0,
-        }),
-      );
-      this.globe.scale.set(1, 0.72, body.appearance === "comet" ? 1.4 : 0.88);
+      const built = buildDebrisBody(body.appearance, r);
+      this.globe = built.globe;
       this.group.add(this.globe);
+      if (built.motionAura) {
+        this.motionAura = built.motionAura;
+        this.group.add(this.motionAura);
+      }
     } else if (FANTASY_SET.has(body.appearance)) {
       const built = buildFantasyGlobe(body, textures, r);
       this.globe = built.globe;
@@ -381,11 +620,22 @@ export class BodyView {
       if (built.clockHands) {
         this.clockHands = built.clockHands;
       }
+      if (built.destroyerAura) {
+        this.destroyerAura = built.destroyerAura;
+        this.group.add(this.destroyerAura);
+      }
+      if (built.emberAura) {
+        this.emberAura = built.emberAura;
+        this.group.add(this.emberAura);
+      }
       if (body.appearance === "gaming" && this.globe.material instanceof THREE.MeshStandardMaterial) {
         this.gamingMat = this.globe.material;
       }
       if (body.appearance === "thunder" && this.globe.material instanceof THREE.MeshStandardMaterial) {
         this.thunderMat = this.globe.material;
+      }
+      if (body.appearance === "ember" && this.globe.material instanceof THREE.MeshStandardMaterial) {
+        this.emberMat = this.globe.material;
       }
       if (body.appearance === "discoball") {
         if (built.discoballStudMats) {
@@ -449,13 +699,46 @@ export class BodyView {
     this.group.position.copy(w);
     const s = visualRadius(body) / this.restVisual;
     this.globe.scale.copy(this.restScale).multiplyScalar(s);
-    if (body.kind === "meteor" || body.appearance === "asteroid" || body.appearance === "comet") {
-      this.globe.scale.set(s, s * 0.72, body.appearance === "comet" ? s * 1.4 : s * 0.88);
-    }
     this.clouds?.scale.setScalar(s);
     this.atmosphere?.scale.setScalar(s);
     this.corona?.scale.setScalar(s);
     this.rings?.scale.setScalar(s);
+    if (this.motionAura) {
+      this.motionAura.scale.setScalar(s);
+      const speed = Math.hypot(body.vel.x, body.vel.y, body.vel.z);
+      if (speed > 1e-4) {
+        // Tail / streak points opposite travel direction (+Z of aura faces velocity).
+        const forward = new THREE.Vector3(body.vel.x / speed, body.vel.y / speed, body.vel.z / speed);
+        this.motionAura.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), forward);
+      }
+    }
+    if (this.destroyerAura) {
+      this.destroyerAura.scale.setScalar(s);
+      const speed = Math.hypot(body.vel.x, body.vel.y, body.vel.z);
+      if (speed > 1e-4) {
+        const forward = new THREE.Vector3(body.vel.x / speed, body.vel.y / speed, body.vel.z / speed);
+        this.destroyerAura.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), forward);
+      }
+      const now = performance.now() * 0.001;
+      for (const child of this.destroyerAura.children) {
+        const spin = child.userData.spin as number | undefined;
+        if (typeof spin === "number") {
+          child.rotation.y = now * spin;
+        }
+      }
+    }
+    if (this.emberAura) {
+      this.emberAura.scale.setScalar(s);
+      const nowSec = performance.now() * 0.001;
+      syncEmberAura(this.emberAura, body.id, nowSec);
+    }
+    if (this.emberMat && this.noteFlashUntil <= 0) {
+      const nowSec = performance.now() * 0.001;
+      const pulse = 0.55 + 0.45 * Math.sin(nowSec * 8.5 + body.id);
+      const pulse2 = 0.5 + 0.5 * Math.sin(nowSec * 13.1 + body.id * 0.6);
+      this.emberMat.emissiveIntensity = 0.95 + 0.55 * pulse + 0.25 * pulse2;
+      this.emberMat.emissive.setRGB(0.45 + 0.2 * pulse2, 0.82 + 0.15 * pulse, 1);
+    }
     if (this.label) {
       this.label.position.y = visualRadius(body) + 4;
     }
@@ -582,7 +865,14 @@ export class BodyView {
 
   dispose(sharedMaps: ReadonlySet<THREE.Texture>): void {
     this.group.traverse((obj) => {
-      if (!(obj instanceof THREE.Mesh || obj instanceof THREE.Sprite || obj instanceof THREE.Line)) {
+      if (
+        !(
+          obj instanceof THREE.Mesh ||
+          obj instanceof THREE.Sprite ||
+          obj instanceof THREE.Line ||
+          obj instanceof THREE.Points
+        )
+      ) {
         return;
       }
       if ("geometry" in obj && obj.geometry) {

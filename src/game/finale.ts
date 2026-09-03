@@ -1,7 +1,7 @@
 import { makeCatalogBody } from "./catalog";
 import { createBody, type Body } from "../physics/body";
 import { G, SOFTENING } from "../physics/constants";
-import { relativeSpeed, type CollisionEvent } from "../physics/collision";
+import { reflectedDebrisKick, relativeSpeed, type CollisionEvent } from "../physics/collision";
 import { add, dist, dot, length, normalize, scale, sub, vec3, type Vec3 } from "../physics/vec3";
 
 /** Pacing reference for credits scroll speed and destroyer approach (not BGM length). */
@@ -18,6 +18,8 @@ const CREDITS_SCROLL_LEGACY_RANGE = 200;
 
 /** Scroll speed: % of credits block height per second (legacy 85% → −115% in 103 s). */
 export const CREDITS_SCROLL_SPEED_PCT_PER_SEC = CREDITS_SCROLL_LEGACY_RANGE / FINALE_PACE_SEC;
+/** Hold after BGM starts before the credits roll begins. */
+export const CREDITS_SCROLL_DELAY_SEC = 5;
 
 export function creditsScrollDurationSec(scrollHeightPx: number, viewportHeightPx: number): number {
   const h = Math.max(scrollHeightPx, 1);
@@ -42,11 +44,68 @@ export const CREDITS_BUTTON_OPACITY = 0.38;
 /** Seconds before the destroyer can shatter planets (lets the scene settle in view). */
 export const FINALE_COLLISION_DELAY_SEC = 3;
 
-/** Gameplay hit radius — physics radius is huge for destroyer mass. */
-const DESTROYER_REACH = 11;
-const DESTROYER_SPAWN_DIST = 400;
+/** Far spawn so the destroyer reads as a distant speck. */
+export const DESTROYER_SPAWN_DIST = 3200;
+/** Distance after the rush — matches the old starting approach range. */
+export const DESTROYER_RUSH_HANDOFF_DIST = 400;
+/** Seconds of BGM before the rush ends at the handoff distance. */
+export const DESTROYER_RUSH_SEC = 10;
+/** Draw scale for destroyer hit / framing (mirrors render DRAW.destroyer). */
+const DESTROYER_DRAW = 0.55;
+const DESTROYER_MIN_R = 90;
+const SUN_DRAW = 1.08;
+const SUN_MIN_R = 18;
+/** Planet smash: a bit inward of the visible surface for weight. */
+export const FINALE_PLANET_CONTACT_SCALE = 0.8;
+/** Core-sun contact that starts the wind-up (near surface). */
+export const FINALE_SUN_CONTACT_SCALE = 0.92;
+/** Hold after first sun contact before the big bang. */
+export const FINALE_SUN_WINDUP_SEC = 4.2;
 const DESTROYER_CAMERA_DIST = 500;
 const DESTROYER_CAMERA_HEIGHT = 62;
+
+function clamp01(t: number): number {
+  return Math.max(0, Math.min(1, t));
+}
+
+/** Visible surface radius used for finale collisions (not the oversized physics radius). */
+export function finaleHitRadius(body: Body): number {
+  if (body.appearance === "destroyer") {
+    return Math.max(body.radius * DESTROYER_DRAW, DESTROYER_MIN_R);
+  }
+  if (body.kind === "sun") {
+    return Math.max(body.radius * SUN_DRAW, SUN_MIN_R);
+  }
+  return Math.max(body.radius * 1.2, body.radius);
+}
+
+/** Slow-phase approach speed after the rush (same ramp as the old finale). */
+export function destroyerSlowSpeed(elapsed: number): number {
+  const slowElapsed = Math.max(0, elapsed - DESTROYER_RUSH_SEC);
+  const t = Math.min(1, slowElapsed / FINALE_PACE_SEC);
+  const ramp = Math.pow(t, 1.4);
+  return 2.4 + ramp * 4.2;
+}
+
+/**
+ * Axial distance during the rush. Hermite blend so the handoff lands on the
+ * slow-phase speed instead of slamming to a stop.
+ */
+export function destroyerRushDistance(elapsed: number): number {
+  const T = DESTROYER_RUSH_SEC;
+  const u = clamp01(elapsed / T);
+  const p0 = DESTROYER_SPAWN_DIST;
+  const p1 = DESTROYER_RUSH_HANDOFF_DIST;
+  const v0 = 0;
+  const v1 = -destroyerSlowSpeed(DESTROYER_RUSH_SEC);
+  const u2 = u * u;
+  const u3 = u2 * u;
+  const h00 = 2 * u3 - 3 * u2 + 1;
+  const h10 = u3 - 2 * u2 + u;
+  const h01 = -2 * u3 + 3 * u2;
+  const h11 = u3 - u2;
+  return h00 * p0 + h10 * (v0 * T) + h01 * p1 + h11 * (v1 * T);
+}
 
 export interface FinaleState {
   active: boolean;
@@ -55,6 +114,8 @@ export interface FinaleState {
   creditsDone: boolean;
   destroyerGone: boolean;
   sunExploded: boolean;
+  /** Finale elapsed when the destroyer first kissed the core sun. */
+  sunContactAt: number | null;
   /** Finale elapsed when the core sun exploded; drives post-bang epilogue lines. */
   sunExplodedAt: number | null;
   explosionPos: { x: number; y: number; z: number };
@@ -72,6 +133,7 @@ export function createFinale(): FinaleState {
     creditsDone: false,
     destroyerGone: false,
     sunExploded: false,
+    sunContactAt: null,
     sunExplodedAt: null,
     explosionPos: vec3(),
     sunAnchor: vec3(),
@@ -135,7 +197,8 @@ export function prepareFinaleScene(bodies: Body[], destroyer: Body, state: Final
   state.cameraDistance = DESTROYER_CAMERA_DIST;
   state.cameraHeight = DESTROYER_CAMERA_HEIGHT;
   destroyer.pos = add(state.sunAnchor, scale(state.approachDir, DESTROYER_SPAWN_DIST));
-  destroyer.vel = scale(state.approachDir, -2.6);
+  const rushSpan = DESTROYER_SPAWN_DIST - DESTROYER_RUSH_HANDOFF_DIST;
+  destroyer.vel = scale(state.approachDir, -(rushSpan / DESTROYER_RUSH_SEC));
   destroyer.peerGravity = false;
   stabilizeFinaleSun(bodies, state);
 }
@@ -154,13 +217,23 @@ export function stabilizeFinaleSun(bodies: Body[], state: FinaleState): void {
   anchorSun.vel.z = 0;
 }
 
-function destroyerReach(_destroyer: Body): number {
-  return DESTROYER_REACH;
+function finaleColliding(destroyer: Body, other: Body, scaleFactor = FINALE_PLANET_CONTACT_SCALE): boolean {
+  const reach = (finaleHitRadius(destroyer) + finaleHitRadius(other)) * scaleFactor;
+  return dist(destroyer.pos, other.pos) < reach;
 }
 
-function finaleColliding(destroyer: Body, other: Body): boolean {
-  const reach = destroyerReach(destroyer) + other.radius;
-  return dist(destroyer.pos, other.pos) < reach;
+/** 0..1 intensity for the sun-contact wind-up shake. */
+export function finaleSunWindupShake(state: FinaleState): number {
+  if (state.sunContactAt === null || state.sunExploded) {
+    return 0;
+  }
+  const t = state.elapsed - state.sunContactAt;
+  if (t < 0 || t > FINALE_SUN_WINDUP_SEC) {
+    return 0;
+  }
+  const u = t / FINALE_SUN_WINDUP_SEC;
+  // Ease in, stay gentle — peak ~1 near the end without a harsh snap.
+  return clamp01(u * u * (0.55 + 0.45 * u));
 }
 
 function collisionMidpoint(a: Body, b: Body): { x: number; y: number; z: number } {
@@ -172,29 +245,31 @@ function collisionMidpoint(a: Body, b: Body): { x: number; y: number; z: number 
   };
 }
 
-function spawnBurstDebris(bodies: Body[], source: Body, count: number, speed: number, cap = 24): void {
+function spawnBurstDebris(
+  bodies: Body[],
+  source: Body,
+  other: Body,
+  count: number,
+  speed: number,
+  cap = 64,
+): void {
   const ephemeral = bodies.filter((b) => b.alive && b.ephemeral).length;
   const budget = Math.min(cap - ephemeral, count);
   if (budget <= 0) {
     return;
   }
-  const chunk = Math.max(0.004, source.mass / (budget + 2));
+  const chunk = Math.max(0.0006, source.mass / (budget * 3 + 8));
   for (let i = 0; i < budget; i++) {
-    const ang = (i / budget) * Math.PI * 2 + Math.random() * 0.4;
-    const kick = vec3(
-      Math.cos(ang) * speed * (0.7 + Math.random() * 0.5),
-      (Math.random() - 0.5) * speed * 0.35,
-      Math.sin(ang) * speed * (0.7 + Math.random() * 0.5),
-    );
+    const kick = reflectedDebrisKick(source, other, speed * (0.55 + Math.random() * 0.7));
     bodies.push(
       createBody({
         kind: "meteor",
-        appearance: "asteroid",
-        mass: chunk,
-        size: 0.32 + Math.random() * 0.2,
-        pos: add(source.pos, scale(normalize(kick), source.radius + 1.5)),
-        vel: add(source.vel, kick),
-        spin: 1.8,
+        appearance: Math.random() > 0.55 ? "ember" : "asteroid",
+        mass: chunk * (0.4 + Math.random() * 0.9),
+        size: 0.05 + Math.random() * 0.09,
+        pos: add(source.pos, scale(normalize(kick), source.radius * 0.55 + 0.6)),
+        vel: add(other.vel, kick),
+        spin: 2.4 + Math.random() * 3,
         ephemeral: true,
       }),
     );
@@ -280,15 +355,25 @@ export function resolveFinaleCollisions(bodies: Body[], state: FinaleState): Col
     if (!other.alive || other.ephemeral || other.id === destroyer.id) {
       continue;
     }
-    if (!finaleColliding(destroyer, other)) {
+    if (other.kind === "sun" && other.core) {
+      if (!finaleColliding(destroyer, other, FINALE_SUN_CONTACT_SCALE)) {
+        continue;
+      }
+      if (state.sunContactAt === null) {
+        state.sunContactAt = state.elapsed;
+        return null;
+      }
+      if (state.elapsed - state.sunContactAt < FINALE_SUN_WINDUP_SEC) {
+        return null;
+      }
+      return explodeFinaleSun(bodies, other, destroyer, state);
+    }
+    if (!finaleColliding(destroyer, other, FINALE_PLANET_CONTACT_SCALE)) {
       continue;
     }
     const rel = relativeSpeed(destroyer, other);
     const pos = collisionMidpoint(destroyer, other);
-    if (other.kind === "sun" && other.core) {
-      return explodeFinaleSun(bodies, other, destroyer, state);
-    }
-    spawnBurstDebris(bodies, other, other.kind === "sun" ? 8 : 4, 18 + rel * 0.08);
+    spawnBurstDebris(bodies, other, destroyer, other.kind === "sun" ? 22 : 18, 16 + rel * 0.07);
     other.alive = false;
     return { kind: "shatter", aId: destroyer.id, bId: other.id, pos, relSpeed: rel };
   }
@@ -346,13 +431,22 @@ export function tickFinale(state: FinaleState, dt: number, destroyer: Body | und
   if (destroyer && destroyer.alive) {
     constrainDestroyerToAxis(destroyer, state);
     if (!state.sunExploded) {
-      const t = Math.min(1, state.elapsed / FINALE_PACE_SEC);
-      const ramp = Math.pow(t, 1.4);
-      const speed = 2.4 + ramp * 4.2;
-      destroyer.vel = scale(state.approachDir, -speed);
+      if (state.sunContactAt !== null) {
+        // Crawl deeper during the wind-up so impact reads as a bite, not a bounce.
+        destroyer.vel = scale(state.approachDir, -0.55);
+      } else if (state.elapsed < DESTROYER_RUSH_SEC) {
+        const nextDist = destroyerRushDistance(state.elapsed);
+        const prevDist = destroyerRushDistance(Math.max(0, state.elapsed - dt));
+        destroyer.pos = add(state.sunAnchor, scale(state.approachDir, nextDist));
+        const speed = Math.max(0, (prevDist - nextDist) / Math.max(dt, 1e-4));
+        destroyer.vel = scale(state.approachDir, -speed);
+      } else {
+        const speed = destroyerSlowSpeed(state.elapsed);
+        destroyer.vel = scale(state.approachDir, -speed);
+      }
     }
   }
-  if (state.elapsed >= CREDITS_SCROLL_SEC) {
+  if (state.elapsed >= CREDITS_SCROLL_DELAY_SEC + CREDITS_SCROLL_SEC) {
     state.creditsDone = true;
   }
 }
@@ -368,11 +462,13 @@ export const FINALE_EPILOGUE_LINES: readonly string[] = [
 export const EPILOGUE_FADE_IN_SEC = 2.4;
 export const EPILOGUE_HOLD_SEC = 3.2;
 export const EPILOGUE_FADE_OUT_SEC = 2.4;
+/** Quiet beat after the bang before the first epilogue line. */
+export const EPILOGUE_DELAY_SEC = 3.8;
 
 export const EPILOGUE_LINE_SEC = EPILOGUE_FADE_IN_SEC + EPILOGUE_HOLD_SEC + EPILOGUE_FADE_OUT_SEC;
 
 export function finaleEpilogueTotalSec(): number {
-  return FINALE_EPILOGUE_LINES.length * EPILOGUE_LINE_SEC;
+  return EPILOGUE_DELAY_SEC + FINALE_EPILOGUE_LINES.length * EPILOGUE_LINE_SEC;
 }
 
 function smoothstep(t: number): number {
@@ -391,8 +487,8 @@ export function finaleEpilogueFrame(elapsed: number, sunExplodedAt: number | nul
   if (sunExplodedAt === null) {
     return { visible: false, lineIndex: 0, opacity: 0, hope: false };
   }
-  const t = elapsed - sunExplodedAt;
-  if (t < 0 || t >= finaleEpilogueTotalSec()) {
+  const t = elapsed - sunExplodedAt - EPILOGUE_DELAY_SEC;
+  if (t < 0 || t >= FINALE_EPILOGUE_LINES.length * EPILOGUE_LINE_SEC) {
     return { visible: false, lineIndex: 0, opacity: 0, hope: false };
   }
   const lineIndex = Math.min(
@@ -416,9 +512,14 @@ export function finaleEpilogueFrame(elapsed: number, sunExplodedAt: number | nul
   };
 }
 
+/** Wall time when the credits animation finishes (delay + measured scroll). */
+export function finaleCreditsScrollEndSec(scrollSec: number): number {
+  return CREDITS_SCROLL_DELAY_SEC + scrollSec;
+}
+
 export function finaleThanksStartSec(scrollSec: number, sunExplodedAt: number | null): number {
   const epilogueEnd = sunExplodedAt === null ? 0 : sunExplodedAt + finaleEpilogueTotalSec();
-  return Math.max(scrollSec, epilogueEnd);
+  return Math.max(finaleCreditsScrollEndSec(scrollSec), epilogueEnd);
 }
 
 export function finaleCreditsPhase(
