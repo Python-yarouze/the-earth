@@ -3,7 +3,6 @@ dist
 release
 electron
 assets
-src/desktop.ts
 .DS_Store
 *.local
 .vite
