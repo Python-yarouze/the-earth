@@ -3,7 +3,7 @@ import type { Body } from "../physics/body";
 import { G } from "../physics/constants";
 import { accelerations } from "../physics/engine";
 import { length } from "../physics/vec3";
-import { BodyView, loadBodyTextures, type BodyTextures, visualRadius } from "./bodies";
+import { BodyView, createCometFlybyMesh, loadBodyTextures, type BodyTextures, visualRadius } from "./bodies";
 import {
   createCamera,
   createControls,
@@ -88,6 +88,11 @@ export class World {
   private shipLife = 0;
   private shipFrom = new THREE.Vector3();
   private shipTo = new THREE.Vector3();
+  private cometFlyby: THREE.Group | null = null;
+  private cometFlybyT = 0;
+  private cometFlybyLife = 0;
+  private cometFlybyFrom = new THREE.Vector3();
+  private cometFlybyTo = new THREE.Vector3();
   private skyFlareAge = 0;
   private skyFlareColor = new THREE.Color(0xffc8a0);
   private showHeightGuides = true;
@@ -633,6 +638,27 @@ export class World {
     }
   }
 
+  /** Decorative comet streak (title / feedback) — not a physics body. */
+  spawnCometFlyby(from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }): void {
+    this.clearCometFlyby();
+    const g = createCometFlybyMesh(5.5);
+    this.cometFlyby = g;
+    this.cometFlybyFrom.set(from.x, from.y, from.z);
+    this.cometFlybyTo.set(to.x, to.y, to.z);
+    this.cometFlybyT = 0;
+    this.cometFlybyLife = 6.5;
+    g.position.copy(this.cometFlybyFrom);
+    g.lookAt(this.cometFlybyTo);
+    this.scene.add(g);
+  }
+
+  clearCometFlyby(): void {
+    if (this.cometFlyby) {
+      this.scene.remove(this.cometFlyby);
+      this.cometFlyby = null;
+    }
+  }
+
   render(dt: number): void {
     this.sky.rotation.y += dt * 0.003;
     this.tickSupernova(dt);
@@ -657,6 +683,15 @@ export class World {
       this.ship.lookAt(this.shipTo);
       if (u >= 1) {
         this.clearShip();
+      }
+    }
+    if (this.cometFlyby) {
+      this.cometFlybyT += dt;
+      const u = Math.min(1, this.cometFlybyT / this.cometFlybyLife);
+      this.cometFlyby.position.lerpVectors(this.cometFlybyFrom, this.cometFlybyTo, u);
+      this.cometFlyby.lookAt(this.cometFlybyTo);
+      if (u >= 1) {
+        this.clearCometFlyby();
       }
     }
     this.controls.update();

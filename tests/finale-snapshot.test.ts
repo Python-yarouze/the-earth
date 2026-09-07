@@ -46,4 +46,14 @@ describe("finale snapshot persistence", () => {
     expect(restored?.years).toBe(42);
     expect(restored?.recent).toEqual([80, 81, 82]);
   });
+
+  it("can rehydrate a replay system from sessionStorage alone", () => {
+    resetBodyIds();
+    const bodies = solarSystemBodies();
+    persistFinaleSnapshot(bodies);
+    const hydrated = loadPersistedFinaleSnapshot();
+    expect(hydrated).not.toBeNull();
+    expect(hydrated!.some((b) => b.kind === "sun")).toBe(true);
+    expect(hydrated!.filter((b) => b.appearance === "destroyer")).toHaveLength(0);
+  });
 });

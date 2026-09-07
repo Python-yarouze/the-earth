@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createBody, resetBodyIds } from "../src/physics/body";
 import {
   applyDestroyerGravity,
+  bodiesForFinaleReplay,
   computeFinaleApproachDir,
   CREDIT_SECTIONS,
   DESTROYER_RUSH_HANDOFF_DIST,
@@ -261,6 +262,41 @@ describe("finale collisions", () => {
     expect(earth.vel.x).toBeLessThan(0);
   });
 
+  it("nudges planets across the solar system before impact, without an uncapped plunge", () => {
+    resetBodyIds();
+    const destroyer = createBody({
+      kind: "planet",
+      appearance: "destroyer",
+      mass: 12000,
+      size: 2.2,
+      pos: vec3(0, 0),
+      vel: vec3(),
+    });
+    const far = createBody({
+      kind: "planet",
+      appearance: "neptune",
+      mass: 8,
+      pos: vec3(400, 0),
+      vel: vec3(0, 0),
+    });
+    const near = createBody({
+      kind: "earth",
+      appearance: "earth",
+      mass: 12,
+      pos: vec3(80, 0),
+      vel: vec3(0, 0),
+    });
+    const state = createFinale();
+    state.destroyerId = destroyer.id;
+    state.elapsed = FINALE_COLLISION_DELAY_SEC;
+    const dt = 1 / 60;
+    applyDestroyerGravity([destroyer, far, near], destroyer, state, dt);
+    expect(far.vel.x).toBeLessThan(0);
+    expect(Math.abs(far.vel.x)).toBeGreaterThan(0.001);
+    // Pre-bang accel is capped (~2.8) so a near planet does not get vacuumed in one frame.
+    expect(Math.abs(near.vel.x)).toBeLessThanOrEqual(2.8 * dt + 1e-9);
+  });
+
   it("aims the destroyer approach through the planet cluster", () => {
     resetBodyIds();
     const sun = createBody({
@@ -385,5 +421,33 @@ describe("destroyer approach", () => {
       (destroyerRushDistance(DESTROYER_RUSH_SEC - eps) - destroyerRushDistance(DESTROYER_RUSH_SEC)) / eps;
     expect(endSpeed).toBeGreaterThan(1.5);
     expect(endSpeed).toBeLessThan(4);
+  });
+});
+
+describe("finale replay scrub", () => {
+  it("drops destroyers and ephemeral debris so a second credits run stays clean", () => {
+    resetBodyIds();
+    const sun = createBody({ kind: "sun", appearance: "sun", mass: 1000, pos: vec3(0, 0, 0) });
+    sun.core = true;
+    const earth = createBody({ kind: "earth", appearance: "earth", mass: 12, pos: vec3(0, 0, 80) });
+    const destroyer = createBody({
+      kind: "planet",
+      appearance: "destroyer",
+      mass: 12000,
+      pos: vec3(400, 0, 0),
+    });
+    const debris = createBody({
+      kind: "meteor",
+      appearance: "asteroid",
+      mass: 0.01,
+      pos: vec3(10, 0, 10),
+    });
+    debris.ephemeral = true;
+    const clean = bodiesForFinaleReplay([sun, earth, destroyer, debris, destroyer]);
+    expect(clean).toHaveLength(2);
+    expect(clean.every((b) => b.appearance !== "destroyer")).toBe(true);
+    expect(clean.every((b) => !b.ephemeral)).toBe(true);
+    expect(clean.some((b) => b.kind === "sun")).toBe(true);
+    expect(clean.some((b) => b.kind === "earth")).toBe(true);
   });
 });

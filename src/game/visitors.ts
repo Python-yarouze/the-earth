@@ -212,6 +212,17 @@ export function shipPath(): { from: Vec3; to: Vec3 } {
   };
 }
 
+/** Far background comet arc for title-screen feedback (visual only). */
+export function cometFlybyPath(): { from: Vec3; to: Vec3 } {
+  const a = Math.random() * Math.PI * 2;
+  const b = a + Math.PI + (Math.random() - 0.5) * 0.5;
+  const r = 340;
+  return {
+    from: vec3(Math.cos(a) * r, 40 + Math.random() * 50, Math.sin(a) * r),
+    to: vec3(Math.cos(b) * r, 20 + Math.random() * 40, Math.sin(b) * r),
+  };
+}
+
 export function cullMeteors(bodies: Body[]): Body[] {
   return bodies.filter((b) => {
     if (!b.ephemeral) {

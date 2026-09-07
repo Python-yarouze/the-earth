@@ -53,7 +53,7 @@ export function buildTipText(stage: StageDef | null): string {
     return "空をドラッグでカメラ。短くクリックで置く。月は地球の近くで衛星になる。";
   }
   if (stage?.canMoveEarth) {
-    return "ドラッグで距離、Shift で高さ。空をドラッグでカメラ。";
+    return "ドラッグで距離、Shift か『高さ』で上下。空をドラッグでカメラ。";
   }
   return "START を押す。地球はすでに軌道に乗っている。";
 }
@@ -159,7 +159,7 @@ function tipsPanel(): string {
           <h3>配置</h3>
           <ul>
             <li>左の惑星を選び、空を短くクリックで置く。</li>
-            <li>惑星をドラッグで距離、Shift＋ドラッグで高さ。</li>
+            <li>惑星をドラッグで距離、Shift＋ドラッグで高さ。スマホは『高さ』をオンにしてドラッグ。</li>
             <li>空をドラッグでカメラを動かす。</li>
             <li>月は地球の近くに置くと衛星になる。</li>
             <li>いらない惑星や追加した太陽は Delete で消せる。</li>
@@ -339,6 +339,7 @@ export class Hud {
     selected: Body | null;
     pickAppearance: AppearanceId;
     analysis: boolean;
+    liftMode?: boolean;
     stats: EarthStats | null;
     progress: Progress;
     notice: string;
@@ -357,6 +358,7 @@ export class Hud {
       selected,
       pickAppearance,
       analysis,
+      liftMode = false,
       stats,
       progress,
       notice,
@@ -509,6 +511,7 @@ export class Hud {
           : "";
       const bottomInner = `
         <div class="row bar-actions">
+          <button type="button" class="ghost ${liftMode ? "on" : ""}" data-act="lift-mode" aria-pressed="${liftMode}">高さ</button>
           ${chimeButtons(progress, chimeLoop)}
           <button class="ghost" data-act="share">共有</button>
           <button class="cta" data-act="start">START</button>

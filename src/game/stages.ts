@@ -33,7 +33,7 @@ export const STAGES: StageDef[] = [
     id: "2",
     number: 2,
     title: "距離と高さ",
-    prompt: "地球を動かす。Shift で上下。",
+    prompt: "地球を動かす。Shift か『高さ』で上下。",
     allowPlanets: false,
     maxPlanets: 0,
     canMoveEarth: true,

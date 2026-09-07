@@ -1,5 +1,5 @@
 import { makeCatalogBody } from "./catalog";
-import { createBody, type Body } from "../physics/body";
+import { cloneBody, createBody, type Body } from "../physics/body";
 import { G, SOFTENING } from "../physics/constants";
 import { reflectedDebrisKick, relativeSpeed, type CollisionEvent } from "../physics/collision";
 import { add, dist, dot, length, normalize, scale, sub, vec3, type Vec3 } from "../physics/vec3";
@@ -148,6 +148,11 @@ export function spawnDestroyer(_bodies: readonly Body[]): Body {
   const d = makeCatalogBody("destroyer", vec3());
   d.peerGravity = false;
   return d;
+}
+
+/** Strip destroyers and ephemeral debris so a replay starts from a clean system. */
+export function bodiesForFinaleReplay(bodies: readonly Body[]): Body[] {
+  return bodies.filter((b) => b.appearance !== "destroyer" && !b.ephemeral).map(cloneBody);
 }
 
 /** Approach from the far side of the player's cluster so the camera sees planets + destroyer. */
@@ -380,7 +385,11 @@ export function resolveFinaleCollisions(bodies: Body[], state: FinaleState): Col
   return null;
 }
 
-/** Pull stray planets toward the destroyer — stronger after the sun is gone. */
+/**
+ * Pull planets toward the destroyer.
+ * Before the bang: reach the whole system so solar orbits start to drift, but cap
+ * acceleration so near-side planets are not vacuumed in. After the bang: full tug.
+ */
 export function applyDestroyerGravity(
   bodies: Body[],
   destroyer: Body,
@@ -391,11 +400,14 @@ export function applyDestroyerGravity(
   if (state.elapsed < FINALE_COLLISION_DELAY_SEC && !state.sunExploded) {
     return;
   }
-  const factor = state.sunExploded ? 0.95 : 0.22;
-  const maxReach = state.sunExploded ? Infinity : 140;
+  const factor = state.sunExploded ? 0.95 : 0.18;
+  /** Cover Neptune-scale orbits while the destroyer is still on final approach. */
+  const maxReach = state.sunExploded ? Infinity : 2400;
+  /** Mild nudge vs solar accel at Earth — orbits drift without a hard yank. */
+  const maxAccel = state.sunExploded ? Infinity : 2.8;
   const eps2 = SOFTENING * SOFTENING;
   for (const body of bodies) {
-    if (!body.alive || body.ephemeral || body.id === destroyer.id) {
+    if (!body.alive || body.ephemeral || body.id === destroyer.id || body.kind === "sun") {
       continue;
     }
     const dx = destroyer.pos.x - body.pos.x;
@@ -406,7 +418,7 @@ export function applyDestroyerGravity(
     if (r > maxReach || r < 1e-3) {
       continue;
     }
-    const pull = (g * destroyer.mass * factor) / r2;
+    const pull = Math.min((g * destroyer.mass * factor) / r2, maxAccel);
     body.vel.x += (dx / r) * pull * dt;
     body.vel.y += (dy / r) * pull * dt;
     body.vel.z += (dz / r) * pull * dt;

@@ -5,6 +5,7 @@ import { catalogEntry, catalogLabel } from "./game/catalog";
 import { createStats, earthOf, evaluateFrame, sunOf, tickFinaleYears, type EarthStats } from "./game/evaluation";
 import {
   applyDestroyerGravity,
+  bodiesForFinaleReplay,
   createFinale,
   prepareFinaleScene,
   resolveFinaleCollisions,
@@ -73,6 +74,7 @@ import {
   shouldSpawnSkyFlare,
   shouldSpawnSwarm,
   shipPath,
+  cometFlybyPath,
   type VisitorClock,
 } from "./game/visitors";
 import {
@@ -121,6 +123,7 @@ export class Game {
   private notice = "";
   private copied = false;
   private drag: "move" | "lift" | null = null;
+  private liftMode = false;
   private liftStart = { y: 0, clientY: 0 };
   private pointer = new THREE.Vector2();
   private world: World;
@@ -165,6 +168,9 @@ export class Game {
   private finaleStatsSnapshot: EarthStats | null = null;
   private finaleYearRate = Math.PI / 8;
   private finaleIsReplay = false;
+  /** Hold destroyer/credits clock until BGM is actually audible (avoids first-load decode lag). */
+  private finaleAudioReady = false;
+  private static readonly FINALE_AUDIO_WAIT_MS = 8000;
   private debugResetPrompt = false;
   private konamiIndex = 0;
   private static readonly KONAMI_KEYS = [
@@ -208,6 +214,7 @@ export class Game {
       selected: this.selected(),
       pickAppearance: this.pickAppearance,
       analysis: this.analysis,
+      liftMode: this.liftMode,
       stats: this.stats,
       progress: this.progress,
       notice: this.notice,
@@ -655,6 +662,8 @@ export class Game {
     this.notice = "";
     this.noticeTimer = 0;
     this.noticeQueue = [];
+    this.tipBlLines = [];
+    this.tipBlTimer = 0;
     this.simSpeed = 1;
     this.finale = createFinale();
     this.finale.active = true;
@@ -666,7 +675,19 @@ export class Game {
       };
       persistFinaleSnapshot(this.finaleSnapshot);
       persistFinaleStats(this.stats);
+    } else {
+      const snap = this.resolveFinaleReplayBodies();
+      if (!snap || snap.length === 0) {
+        this.finale.active = false;
+        this.finaleIsReplay = false;
+        this.flashNotice("まだエンドクレジット用の記録がありません");
+        return;
+      }
+      this.live = bodiesForFinaleReplay(snap);
+      this.world.clearViews();
+      this.world.trails.reset();
     }
+    this.live = bodiesForFinaleReplay(this.live);
     const earth = earthOf(this.live);
     const sun = sunOf(this.live);
     if (earth?.alive && sun?.alive) {
@@ -687,29 +708,40 @@ export class Game {
     this.phase = "finale";
     this.acc = 0;
     this.snapshotLive();
-    this.sound.startFinaleMusic();
+    this.finaleAudioReady = false;
+    const audioToken = this.finale;
+    const waitCap = new Promise<void>((resolve) => {
+      window.setTimeout(resolve, Game.FINALE_AUDIO_WAIT_MS);
+    });
+    void Promise.race([this.sound.startFinaleMusic(), waitCap]).then(() => {
+      if (this.phase === "finale" && this.finale === audioToken && this.finale.active) {
+        this.finaleAudioReady = true;
+      }
+    });
     this.world.trails.reset();
     this.world.enterFinale(this.finale, this.live);
     this.show(this.live);
     this.refreshHud();
   }
 
-  /** Prefer this session's finale, then the live sim, then the current build, then saved tab data. */
+  /**
+   * Prefer the pre-finale snapshot (memory, then sessionStorage).
+   * Only then fall back to current live/build — never invent a solar system.
+   */
   private resolveFinaleReplayBodies(): Body[] | null {
+    if (!this.finaleSnapshot || this.finaleSnapshot.length === 0) {
+      this.finaleSnapshot = loadPersistedFinaleSnapshot();
+    }
     if (this.finaleSnapshot && this.finaleSnapshot.length > 0) {
       return cloneBodies(this.finaleSnapshot);
     }
     const simLive = this.live.filter((b) => b.alive && !b.ephemeral);
     if (simLive.length > 0) {
-      return cloneBodies(this.live);
+      return bodiesForFinaleReplay(this.live);
     }
     const buildLive = this.build.filter((b) => b.alive && !b.ephemeral);
     if (buildLive.length > 0) {
-      return cloneBodies(this.build);
-    }
-    const persisted = loadPersistedFinaleSnapshot();
-    if (persisted && persisted.length > 0) {
-      return cloneBodies(persisted);
+      return bodiesForFinaleReplay(this.build);
     }
     return null;
   }
@@ -732,7 +764,7 @@ export class Game {
     }
     this.world.clearViews();
     this.world.trails.reset();
-    this.live = bodies;
+    this.live = bodiesForFinaleReplay(bodies);
     if (this.finaleStatsSnapshot) {
       this.stats = {
         ...this.finaleStatsSnapshot,
@@ -746,20 +778,27 @@ export class Game {
     this.notice = "";
     this.noticeTimer = 0;
     this.noticeQueue = [];
+    this.tipBlLines = [];
+    this.tipBlTimer = 0;
     this.simSpeed = 1;
     this.startFinale({ replay: true });
   }
 
   private endFinale(): void {
     this.sound.stopFinaleMusic();
+    this.finaleAudioReady = false;
     this.world.exitFinale();
     this.finaleIsReplay = false;
     this.finale = createFinale();
     const returnPhase = this.finaleReturnPhase;
     this.finaleReturnPhase = null;
     if (returnPhase === "unlocks") {
-      this.phase = "unlocks";
+      // Do not leave bang wreckage / destroyer in live for the next replay.
+      this.live = [];
+      this.world.clearViews();
+      this.world.trails.reset();
       this.world.setWatching(false);
+      this.phase = "unlocks";
       this.refreshHud();
       this.sound.click();
       return;
@@ -1104,6 +1143,10 @@ export class Game {
       } else if (act === "analysis") {
         this.analysis = !this.analysis;
         this.refreshHud();
+      } else if (act === "lift-mode") {
+        this.liftMode = !this.liftMode;
+        this.refreshHud();
+        this.sound.click();
       } else if (act === "share") {
         this.openShare();
       } else if (act === "solar" && this.stage.sandbox && hasSolarPreset(this.progress)) {
@@ -1227,7 +1270,7 @@ export class Game {
         this.selectedId = hit.id;
         this.clickAt = null;
         const locked = !canMoveBody(this.stage, hit);
-        this.drag = locked ? null : e.shiftKey ? "lift" : "move";
+        this.drag = locked ? null : e.shiftKey || this.liftMode ? "lift" : "move";
         this.liftStart = { y: hit.pos.y, clientY: e.clientY };
         this.world.controls.enabled = this.drag === null;
         this.refreshHud();
@@ -1325,6 +1368,8 @@ export class Game {
             this.progress = unlockAllProgress();
             saveProgress(this.progress);
             this.flashNotice("すべて解放（デバッグ）");
+            const path = cometFlybyPath();
+            this.world.spawnCometFlyby(path.from, path.to);
             this.refreshHud();
           }
         } else {
@@ -1438,7 +1483,10 @@ export class Game {
         } else {
           this.notice = "";
         }
-        this.refreshHud();
+        // Finale HUD is credits-only — remounting would reset the scroll animation.
+        if (this.phase !== "finale") {
+          this.refreshHud();
+        }
       }
     }
 
@@ -1446,7 +1494,9 @@ export class Game {
       this.tipBlTimer -= dt;
       if (this.tipBlTimer <= 0) {
         this.tipBlLines = [];
-        this.refreshHud();
+        if (this.phase !== "finale") {
+          this.refreshHud();
+        }
       }
     }
 
@@ -1571,11 +1621,12 @@ export class Game {
         }
       }
       const destroyer = this.live.find((b) => b.id === this.finale.destroyerId && b.alive);
-      tickFinale(this.finale, dt, destroyer);
+      const finaleDt = this.finaleAudioReady ? dt : 0;
+      tickFinale(this.finale, finaleDt, destroyer);
       if (destroyer) {
-        applyDestroyerGravity(this.live, destroyer, this.finale, dt, G);
+        applyDestroyerGravity(this.live, destroyer, this.finale, finaleDt, G);
       }
-      this.stats = tickFinaleYears(this.stats, dt, this.finaleYearRate);
+      this.stats = tickFinaleYears(this.stats, finaleDt, this.finaleYearRate);
       this.dropObserveFocusIfGone();
       const display = this.displayBodies(this.acc / DT);
       this.world.trails.push(display);

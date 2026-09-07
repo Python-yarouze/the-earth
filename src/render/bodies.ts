@@ -192,6 +192,17 @@ function lumpyRockGeometry(r: number, detail: number, lump: number): THREE.Buffe
 
 type DebrisBuild = { globe: THREE.Mesh; motionAura?: THREE.Group };
 
+/** Visual-only comet group for title/sandbox flybys (no physics body). */
+export function createCometFlybyMesh(r = 4.5): THREE.Group {
+  const built = buildDebrisBody("comet", r);
+  const g = new THREE.Group();
+  g.add(built.globe);
+  if (built.motionAura) {
+    g.add(built.motionAura);
+  }
+  return g;
+}
+
 function buildDebrisBody(appearance: AppearanceId, r: number): DebrisBuild {
   const soft = softPointTexture();
   if (appearance === "comet") {

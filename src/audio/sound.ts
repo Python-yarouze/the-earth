@@ -28,6 +28,15 @@ export class Sound {
 
   resume(): void {
     void this.ensure().resume();
+    this.preloadFinaleTrack();
+  }
+
+  /** Warm the finale BGM decode cache after the first user gesture. */
+  preloadFinaleTrack(): void {
+    if (!this.enabled) {
+      return;
+    }
+    void this.loadFinaleTrack();
   }
 
   private blip(freq: number, dur: number, type: OscillatorType, gain = 0.08): void {
@@ -314,17 +323,28 @@ export class Sound {
     step();
   }
 
-  /** Plays the finale BGM — the full recording if it loads, else a synth fallback. */
-  startFinaleMusic(onEnd?: () => void): void {
+  /** Plays the finale BGM — resolves when audible playback has started (or immediately if muted). */
+  startFinaleMusic(onEnd?: () => void): Promise<void> {
     this.stopFinaleMusic();
     this.stopChimeLoop();
     this.stopAmbient();
     const token = ++this.finaleToken;
     if (!this.enabled) {
       onEnd?.();
-      return;
+      return Promise.resolve();
     }
-    void this.loadFinaleTrack().then((buffer) => {
+    return this.loadFinaleTrack().then(async (buffer) => {
+      if (token !== this.finaleToken) {
+        return;
+      }
+      const ctx = this.ensure();
+      if (ctx.state === "suspended") {
+        try {
+          await ctx.resume();
+        } catch {
+          /* autoplay policies — still attempt play */
+        }
+      }
       if (token !== this.finaleToken) {
         return;
       }

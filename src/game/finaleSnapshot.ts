@@ -1,8 +1,8 @@
 import type { EarthStats } from "./evaluation";
 import { cloneBody, type Body } from "../physics/body";
 
-const KEY = "the-earth-finale-snapshot";
-const STATS_KEY = "the-earth-finale-stats";
+const KEY = "the-earth-finale-snapshot-v2";
+const STATS_KEY = "the-earth-finale-stats-v2";
 
 export function persistFinaleSnapshot(bodies: readonly Body[]): void {
   try {
