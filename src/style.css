@@ -35,6 +35,14 @@ body {
   z-index: 2;
 }
 
+body.wallpaper-mode #hud {
+  display: none;
+}
+
+body.wallpaper-mode #view {
+  cursor: default;
+}
+
 #hud button,
 #hud input,
 #hud label,

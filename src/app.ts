@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { freqForBody } from "./audio/notes";
 import { Sound } from "./audio/sound";
+import { isDesktopApp } from "./desktop";
 import { catalogEntry, catalogLabel } from "./game/catalog";
 import { createStats, earthOf, evaluateFrame, sunOf, tickFinaleYears, type EarthStats } from "./game/evaluation";
 import {
@@ -172,6 +173,8 @@ export class Game {
   private finaleAudioReady = false;
   private static readonly FINALE_AUDIO_WAIT_MS = 8000;
   private debugResetPrompt = false;
+  private wallpaperActive = false;
+  private soundBeforeWallpaper = true;
   private konamiIndex = 0;
   private static readonly KONAMI_KEYS = [
     "ArrowUp",
@@ -197,6 +200,16 @@ export class Game {
       this.loadSharedBuild(shared, "watch");
     } else {
       this.refreshHud();
+    }
+    if (isDesktopApp() && window.theEarthDesktop) {
+      window.theEarthDesktop.onWallpaperChanged((active) => {
+        this.applyWallpaperState(active);
+      });
+      void window.theEarthDesktop.getWallpaperActive().then((active) => {
+        if (active) {
+          this.applyWallpaperState(true);
+        }
+      });
     }
     this.loop = this.loop.bind(this);
     requestAnimationFrame(this.loop);
@@ -226,6 +239,8 @@ export class Game {
       hudEdges: this.hudEdges,
       debugResetPrompt: this.debugResetPrompt,
       finaleReplay: this.finaleIsReplay,
+      desktop: isDesktopApp(),
+      wallpaperActive: this.wallpaperActive,
     });
   }
 
@@ -600,6 +615,67 @@ export class Game {
     this.flashTipBl(this.simTipLines());
     this.sound.start();
     this.pumpUnlockMeteors();
+    this.refreshHud();
+  }
+
+  /** Enter OS wallpaper mode (Electron / Windows only). */
+  private async requestWallpaperMode(): Promise<void> {
+    if (!isDesktopApp() || !window.theEarthDesktop || this.wallpaperActive) {
+      return;
+    }
+    if (this.phase === "finale") {
+      return;
+    }
+    if (this.phase === "title" || this.phase === "unlocks") {
+      this.enterStage(sandboxStage());
+    }
+    if (this.phase === "build") {
+      this.startSim(false);
+      this.applyUnlocks();
+    }
+    this.soundBeforeWallpaper = this.sound.enabled;
+    this.sound.enabled = false;
+    this.stopChimeLoop(false);
+    this.sound.setAmbient(false);
+    this.sound.stopFinaleMusic();
+
+    const result = await window.theEarthDesktop.enterWallpaper();
+    if (!result.ok) {
+      this.sound.enabled = this.soundBeforeWallpaper;
+      this.flashNotice(result.error ?? "壁紙モードを開始できませんでした");
+      this.refreshHud();
+      return;
+    }
+    this.applyWallpaperState(true);
+  }
+
+  private applyWallpaperState(active: boolean): void {
+    this.wallpaperActive = active;
+    document.body.classList.toggle("wallpaper-mode", active);
+    if (active) {
+      this.tipsOpen = false;
+      this.shareUrl = null;
+      this.sound.enabled = false;
+      this.stopChimeLoop(false);
+      this.sound.setAmbient(false);
+      if (this.phase !== "simulate" && this.phase !== "watch" && this.phase !== "finale") {
+        if (this.phase === "title" || this.phase === "unlocks") {
+          this.enterStage(sandboxStage());
+        }
+        if (this.phase === "build") {
+          this.startSim(false);
+        }
+      }
+      this.world.controls.enableRotate = false;
+      this.world.controls.enablePan = false;
+      this.world.controls.enableZoom = false;
+    } else {
+      this.sound.enabled = this.soundBeforeWallpaper;
+      this.world.controls.enableRotate = true;
+      this.world.controls.enablePan = true;
+      this.world.controls.enableZoom = true;
+    }
+    this.refreshHud();
   }
 
   private resetBuild(): void {
@@ -1121,6 +1197,9 @@ export class Game {
         this.world.trails.reset();
         this.phase = "build";
         this.refreshHud();
+        this.sound.click();
+      } else if (act === "wallpaper" && isDesktopApp() && !this.wallpaperActive) {
+        void this.requestWallpaperMode();
         this.sound.click();
       } else if (act === "start" && this.phase === "build") {
         const earth = this.build.find((b) => b.kind === "earth");

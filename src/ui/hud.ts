@@ -351,6 +351,8 @@ export class Hud {
     hudEdges?: HudEdges;
     debugResetPrompt?: boolean;
     finaleReplay?: boolean;
+    desktop?: boolean;
+    wallpaperActive?: boolean;
   }): void {
     const {
       phase,
@@ -370,7 +372,14 @@ export class Hud {
       hudEdges = { top: false, bottom: false, left: false },
       debugResetPrompt = false,
       finaleReplay = false,
+      desktop = false,
+      wallpaperActive = false,
     } = opts;
+
+    if (wallpaperActive) {
+      this.root.innerHTML = `<div class="hud wallpaper-hud" aria-hidden="true"></div>`;
+      return;
+    }
 
     if (phase === "title") {
       const resetUi = debugResetPrompt
@@ -514,6 +523,7 @@ export class Hud {
           <button type="button" class="ghost ${liftMode ? "on" : ""}" data-act="lift-mode" aria-pressed="${liftMode}">高さ</button>
           ${chimeButtons(progress, chimeLoop)}
           <button class="ghost" data-act="share">共有</button>
+          ${desktop ? `<button class="ghost" data-act="wallpaper">壁紙モード</button>` : ""}
           <button class="cta" data-act="start">START</button>
         </div>
       `;
@@ -571,6 +581,7 @@ export class Hud {
           <button class="ghost ${analysis ? "on" : ""}" data-act="analysis">分析</button>
           ${selected ? `<button class="ghost on" data-act="focus-all">全体視点</button>` : ""}
           <button class="ghost" data-act="share">共有</button>
+          ${desktop ? `<button class="ghost" data-act="wallpaper">壁紙モード</button>` : ""}
           ${
             watch
               ? `<button class="cta" data-act="claim">自分でも組む</button>`
