@@ -430,7 +430,8 @@ h2 {
 .tips-btn {
   position: absolute;
   bottom: 18px;
-  left: 18px;
+  right: 18px;
+  left: auto;
   z-index: 3;
   width: 36px;
   height: 36px;
@@ -543,6 +544,66 @@ h2 {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(231, 228, 216, 0.12);
+  margin-top: 4px;
+}
+
+.settings-lead {
+  margin: 0 0 4px !important;
+  font-size: 13px !important;
+  color: #8f8878 !important;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.settings-label-row label {
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #b7b09f;
+  font-weight: 500;
+}
+
+.settings-value {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: #e8e4d8;
+}
+
+.settings-temp-hints {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #8f8878;
+}
+
+.settings-range {
+  width: 100%;
+  accent-color: #c4b89a;
+  cursor: pointer;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .hud-year {

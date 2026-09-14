@@ -8,7 +8,10 @@ import {
   decodeSharePayload,
   encodeShare,
   encodeSharePayload,
+  PUBLIC_SHARE_ORIGIN,
+  PUBLIC_SHARE_PATH,
   readSharePayload,
+  resolveShareBase,
   shareableBodies,
 } from "../src/game/share";
 import { applyCircularOrbits } from "../src/physics/engine";
@@ -79,6 +82,39 @@ describe("share", () => {
     expect(url).not.toContain("#");
     const payload = readSharePayload({ search: new URL(url).search, hash: "" });
     expect(decodeSharePayload(payload!)).not.toBeNull();
+  });
+
+  it("resolveShareBase uses the public Pages URL for file and localhost", () => {
+    expect(
+      resolveShareBase({
+        protocol: "file:",
+        hostname: "",
+        origin: "null",
+        pathname: "/C:/app/index.html",
+      }),
+    ).toEqual({ origin: PUBLIC_SHARE_ORIGIN, pathname: PUBLIC_SHARE_PATH });
+    expect(
+      resolveShareBase({
+        protocol: "http:",
+        hostname: "localhost",
+        origin: "http://localhost:5173",
+        pathname: "/",
+      }),
+    ).toEqual({ origin: PUBLIC_SHARE_ORIGIN, pathname: PUBLIC_SHARE_PATH });
+  });
+
+  it("resolveShareBase keeps the live origin on GitHub Pages", () => {
+    expect(
+      resolveShareBase({
+        protocol: "https:",
+        hostname: "python-yarouze.github.io",
+        origin: "https://python-yarouze.github.io",
+        pathname: "/the-earth/",
+      }),
+    ).toEqual({
+      origin: "https://python-yarouze.github.io",
+      pathname: "/the-earth/",
+    });
   });
 
   it("drops meteors from the shared payload", () => {

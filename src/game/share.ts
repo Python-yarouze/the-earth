@@ -128,6 +128,21 @@ export function buildShareUrl(bodies: readonly Body[], origin: string, pathname:
   return `${base}${join}s=${payload}`;
 }
 
+/** Public Web URL used when the app is not running on GitHub Pages (Electron, file:, localhost). */
+export const PUBLIC_SHARE_ORIGIN = "https://python-yarouze.github.io";
+export const PUBLIC_SHARE_PATH = "/the-earth/";
+
+export function resolveShareBase(
+  loc: Pick<Location, "protocol" | "hostname" | "origin" | "pathname"> = window.location,
+): { origin: string; pathname: string } {
+  const host = loc.hostname;
+  const localHost = host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  if (loc.protocol === "file:" || loc.protocol === "app:" || localHost) {
+    return { origin: PUBLIC_SHARE_ORIGIN, pathname: PUBLIC_SHARE_PATH };
+  }
+  return { origin: loc.origin, pathname: loc.pathname };
+}
+
 /** Read `s` from query (preferred) or hash fragment (legacy). */
 export function readSharePayload(loc: Pick<Location, "search" | "hash"> = window.location): string | null {
   const fromQuery = new URLSearchParams(loc.search).get("s");

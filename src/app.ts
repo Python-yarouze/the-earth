@@ -2,6 +2,13 @@ import * as THREE from "three";
 import { freqForBody } from "./audio/notes";
 import { Sound } from "./audio/sound";
 import { isDesktopApp } from "./desktop";
+import {
+  clampDisplaySettings,
+  DEFAULT_DISPLAY_SETTINGS,
+  loadDisplaySettings,
+  saveDisplaySettings,
+  type DisplaySettings,
+} from "./game/displaySettings";
 import { catalogEntry, catalogLabel } from "./game/catalog";
 import { createStats, earthOf, evaluateFrame, sunOf, tickFinaleYears, type EarthStats } from "./game/evaluation";
 import {
@@ -39,7 +46,7 @@ import {
   type Progress,
   type UnlockContext,
 } from "./game/progress";
-import { buildShareUrl, decodeShareFromLocation } from "./game/share";
+import { buildShareUrl, decodeShareFromLocation, resolveShareBase } from "./game/share";
 import { randomSandboxBodies } from "./game/randomize";
 import { parseSimSpeed, POV_SIM_SCALE, type SimSpeed } from "./game/speed";
 import { solarSystemBodies } from "./game/solarsystem";
@@ -141,6 +148,7 @@ export class Game {
   private tipBlLines: string[] = [];
   private tipBlTimer = 0;
   private tipsOpen = false;
+  private displaySettings: DisplaySettings = loadDisplaySettings();
   private shareUrl: string | null = null;
   private balancedFor = 0;
   private watchSaveAcc = 0;
@@ -195,6 +203,7 @@ export class Game {
     this.world = world;
     this.hud = hud;
     this.bind();
+    this.world.applyDisplaySettings(this.displaySettings);
     const shared = decodeShareFromLocation();
     if (shared) {
       this.loadSharedBuild(shared, "watch");
@@ -233,6 +242,7 @@ export class Game {
       notice: this.notice,
       tipBl: this.tipBlTimer > 0 ? this.tipBlLines : null,
       tipsOpen: this.tipsOpen,
+      displaySettings: this.displaySettings,
       shareUrl: this.shareUrl,
       simSpeed: this.simSpeed,
       chimeLoop: this.chimeLoop,
@@ -989,7 +999,8 @@ export class Game {
 
   private buildShareUrl(): string {
     const bodies = this.phase === "build" ? this.build : this.live;
-    return buildShareUrl(bodies, window.location.origin, window.location.pathname);
+    const { origin, pathname } = resolveShareBase();
+    return buildShareUrl(bodies, origin, pathname);
   }
 
   private openShare(): void {
@@ -1001,6 +1012,15 @@ export class Game {
     this.shareUrl = this.buildShareUrl();
     this.refreshHud();
     this.sound.click();
+  }
+
+  private patchDisplaySettings(partial: Partial<DisplaySettings>): void {
+    this.displaySettings = clampDisplaySettings({
+      ...this.displaySettings,
+      ...partial,
+    });
+    saveDisplaySettings(this.displaySettings);
+    this.world.applyDisplaySettings(this.displaySettings);
   }
 
   private closeShare(): void {
@@ -1158,6 +1178,24 @@ export class Game {
       } else if (act === "tips-close") {
         this.tipsOpen = false;
         this.refreshHud();
+      } else if (act === "settings-brightness" && el instanceof HTMLInputElement) {
+        this.patchDisplaySettings({ brightness: Number(el.value) });
+        const label = this.hud.root.querySelector('[data-settings-value="brightness"]');
+        if (label) {
+          label.textContent = this.displaySettings.brightness.toFixed(2);
+        }
+        el.setAttribute("aria-valuenow", String(this.displaySettings.brightness));
+      } else if (act === "settings-temp" && el instanceof HTMLInputElement) {
+        this.patchDisplaySettings({ colorTemp: Number(el.value) });
+        const label = this.hud.root.querySelector('[data-settings-value="colorTemp"]');
+        if (label) {
+          label.textContent = this.displaySettings.colorTemp.toFixed(2);
+        }
+        el.setAttribute("aria-valuenow", String(this.displaySettings.colorTemp));
+      } else if (act === "settings-reset") {
+        this.patchDisplaySettings({ ...DEFAULT_DISPLAY_SETTINGS });
+        this.refreshHud();
+        this.sound.click();
       } else if (act === "share-close") {
         this.closeShare();
       } else if (act === "share-copy") {

@@ -7,6 +7,14 @@ import {
   discoveryHint,
   hasDiscovery,
 } from "../game/discoveries";
+import {
+  BRIGHTNESS_MAX,
+  BRIGHTNESS_MIN,
+  COLOR_TEMP_MAX,
+  COLOR_TEMP_MIN,
+  DEFAULT_DISPLAY_SETTINGS,
+  type DisplaySettings,
+} from "../game/displaySettings";
 import type { EarthStats, Mood } from "../game/evaluation";
 import {
   EXTRA_DEFS,
@@ -107,41 +115,61 @@ function tipsButton(): string {
   return `<button type="button" class="tips-btn" data-act="tips" aria-label="遊び方" title="遊び方">!</button>`;
 }
 
-export type HudEdge = "top" | "bottom" | "left";
-
-export type HudEdges = Record<HudEdge, boolean>;
-
-const EDGE_TAB_MARK: Record<HudEdge, { closed: string; open: string }> = {
-  top: { closed: "▾", open: "▴" },
-  bottom: { closed: "▴", open: "▾" },
-  left: { closed: "›", open: "‹" },
-};
-
-export function edgeTabMark(edge: HudEdge, open: boolean): string {
-  return open ? EDGE_TAB_MARK[edge].open : EDGE_TAB_MARK[edge].closed;
+function displaySettingsFields(settings: DisplaySettings): string {
+  const bright = settings.brightness.toFixed(2);
+  const temp = settings.colorTemp.toFixed(2);
+  return `<section class="settings-body">
+    <h3>表示</h3>
+    <p class="settings-lead">暗いディスプレイでも見やすくするための環境光の調整です。</p>
+    <div class="settings-field">
+      <div class="settings-label-row">
+        <label for="settings-brightness">明るさ</label>
+        <span class="settings-value" data-settings-value="brightness">${bright}</span>
+      </div>
+      <input
+        id="settings-brightness"
+        class="settings-range"
+        type="range"
+        data-act="settings-brightness"
+        min="${BRIGHTNESS_MIN}"
+        max="${BRIGHTNESS_MAX}"
+        step="0.01"
+        value="${bright}"
+        aria-valuemin="${BRIGHTNESS_MIN}"
+        aria-valuemax="${BRIGHTNESS_MAX}"
+        aria-valuenow="${bright}"
+      />
+    </div>
+    <div class="settings-field">
+      <div class="settings-label-row">
+        <label for="settings-temp">色温度</label>
+        <span class="settings-value" data-settings-value="colorTemp">${temp}</span>
+      </div>
+      <div class="settings-temp-hints" aria-hidden="true">
+        <span>冷たい</span>
+        <span>暖かい</span>
+      </div>
+      <input
+        id="settings-temp"
+        class="settings-range"
+        type="range"
+        data-act="settings-temp"
+        min="${COLOR_TEMP_MIN}"
+        max="${COLOR_TEMP_MAX}"
+        step="0.01"
+        value="${temp}"
+        aria-valuemin="${COLOR_TEMP_MIN}"
+        aria-valuemax="${COLOR_TEMP_MAX}"
+        aria-valuenow="${temp}"
+      />
+    </div>
+    <div class="settings-actions">
+      <button type="button" class="ghost" data-act="settings-reset">リセット</button>
+    </div>
+  </section>`;
 }
 
-function edgeShell(
-  edge: HudEdge,
-  label: string,
-  open: boolean,
-  inner: string,
-  tag: "aside" | "div" = "div",
-  attrs = "",
-): string {
-  const mark = edgeTabMark(edge, open);
-  const tab = `<button type="button" class="edge-tab edge-tab-${edge}" data-act="hud-edge" data-edge="${edge}" aria-expanded="${open}" aria-label="${label}" title="${label}">${mark}</button>`;
-  const panel = `<div class="edge-panel">${inner}</div>`;
-  const drawer = edge === "bottom" ? `${tab}${panel}` : `${panel}${tab}`;
-  const openClass = open ? " edge-open" : "";
-  const shell = `<div class="edge-drawer">${drawer}</div>`;
-  if (tag === "aside") {
-    return `<aside class="edge edge-${edge}${openClass}" ${attrs}>${shell}</aside>`;
-  }
-  return `<div class="edge edge-${edge}${openClass}" ${attrs}>${shell}</div>`;
-}
-
-function tipsPanel(): string {
+function tipsPanel(settings: DisplaySettings): string {
   return `<div class="tips-layer">
     <button type="button" class="tips-backdrop" data-act="tips-close" aria-label="閉じる"></button>
     <div class="tips-panel" role="dialog" aria-modal="true" aria-labelledby="tips-title">
@@ -183,9 +211,44 @@ function tipsPanel(): string {
             <li>崩れても宇宙は動き続ける。やり直して、また組む。</li>
           </ul>
         </section>
+        ${displaySettingsFields(settings)}
       </div>
     </div>
   </div>`;
+}
+
+export type HudEdge = "top" | "bottom" | "left";
+
+export type HudEdges = Record<HudEdge, boolean>;
+
+const EDGE_TAB_MARK: Record<HudEdge, { closed: string; open: string }> = {
+  top: { closed: "▾", open: "▴" },
+  bottom: { closed: "▴", open: "▾" },
+  left: { closed: "›", open: "‹" },
+};
+
+export function edgeTabMark(edge: HudEdge, open: boolean): string {
+  return open ? EDGE_TAB_MARK[edge].open : EDGE_TAB_MARK[edge].closed;
+}
+
+function edgeShell(
+  edge: HudEdge,
+  label: string,
+  open: boolean,
+  inner: string,
+  tag: "aside" | "div" = "div",
+  attrs = "",
+): string {
+  const mark = edgeTabMark(edge, open);
+  const tab = `<button type="button" class="edge-tab edge-tab-${edge}" data-act="hud-edge" data-edge="${edge}" aria-expanded="${open}" aria-label="${label}" title="${label}">${mark}</button>`;
+  const panel = `<div class="edge-panel">${inner}</div>`;
+  const drawer = edge === "bottom" ? `${tab}${panel}` : `${panel}${tab}`;
+  const openClass = open ? " edge-open" : "";
+  const shell = `<div class="edge-drawer">${drawer}</div>`;
+  if (tag === "aside") {
+    return `<aside class="edge edge-${edge}${openClass}" ${attrs}>${shell}</aside>`;
+  }
+  return `<div class="edge edge-${edge}${openClass}" ${attrs}>${shell}</div>`;
 }
 
 function moodLine(mood: Mood): string {
@@ -301,7 +364,17 @@ export class Hud {
       if (!el || el.hasAttribute("disabled")) {
         return;
       }
+      if (el instanceof HTMLInputElement && el.type === "range") {
+        return;
+      }
       fn(el.dataset.act ?? "", el);
+    });
+    this.root.addEventListener("input", (e) => {
+      const el = e.target as HTMLElement;
+      if (!(el instanceof HTMLInputElement) || el.type !== "range" || !el.dataset.act) {
+        return;
+      }
+      fn(el.dataset.act, el);
     });
   }
 
@@ -345,6 +418,7 @@ export class Hud {
     notice: string;
     tipBl: string[] | null;
     tipsOpen: boolean;
+    displaySettings?: DisplaySettings;
     shareUrl: string | null;
     simSpeed: SimSpeed;
     chimeLoop: boolean;
@@ -366,6 +440,7 @@ export class Hud {
       notice,
       tipBl,
       tipsOpen,
+      displaySettings,
       shareUrl,
       simSpeed,
       chimeLoop,
@@ -488,7 +563,7 @@ export class Hud {
       ? `<p class="hud-caption hud-caption-tl">${notice}</p>`
       : "";
     const tipBlCaption = tipBl ? tipCaptionBl(tipBl) : "";
-    const tipsUi = `${tipsButton()}${tipsOpen ? tipsPanel() : ""}`;
+    const tipsUi = `${tipsButton()}${tipsOpen ? tipsPanel(displaySettings ?? DEFAULT_DISPLAY_SETTINGS) : ""}`;
     const shareUi = shareUrl ? sharePanel(shareUrl) : "";
 
     if (phase === "build") {
@@ -585,7 +660,7 @@ export class Hud {
           ${
             watch
               ? `<button class="cta" data-act="claim">自分でも組む</button>`
-              : `<button class="${mood === "collapsed" ? "cta" : "ghost"}" data-act="reset">やり直す</button>`
+              : `<button class="${mood === "collapsed" ? "cta" : "ghost"}" data-act="reset">再配置</button>`
           }
         </div>
       `;
@@ -593,6 +668,7 @@ export class Hud {
         <div class="hud edge-hud slim">
           ${noticeCaption}
           ${tipBlCaption}
+          ${tipsUi}
           ${shareUi}
           <span class="hud-year" data-time>${formatYearClock(stats)}</span>
           ${edgeShell("top", "情報", hudEdges.top, topInner)}

@@ -3,8 +3,13 @@ import type { Body } from "../physics/body";
 import { G } from "../physics/constants";
 import { accelerations } from "../physics/engine";
 import { length } from "../physics/vec3";
+import {
+  colorTempCssFilter,
+  type DisplaySettings,
+} from "../game/displaySettings";
 import { BodyView, createCometFlybyMesh, loadBodyTextures, type BodyTextures, visualRadius } from "./bodies";
 import {
+  BASE_TONE_MAPPING_EXPOSURE,
   createCamera,
   createControls,
   createRenderer,
@@ -104,11 +109,14 @@ export class World {
   private readonly _com = new THREE.Vector3();
   private readonly ambientBase = 0.28;
   private readonly ambientBaseColor = new THREE.Color(0x7a8aa8);
+  private readonly hemiBase = 0.32;
+  private readonly envBase = 1.35;
+  /** User fill-light multiplier for dark displays (ambient / hemi / env map). */
+  private displayFill = 1;
   private finaleActive = false;
   private finaleState: FinaleState | null = null;
   private lastFinaleBodies: readonly Body[] = [];
   private savedDamping = true;
-  private savedAmbient = 0.28;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -139,7 +147,7 @@ export class World {
 
     // Soft fill so night sides stay readable; day still dominated by sun PointLights.
     this.ambient = new THREE.AmbientLight(this.ambientBaseColor, this.ambientBase);
-    this.hemi = new THREE.HemisphereLight(0x3a4860, 0x0c1018, 0.32);
+    this.hemi = new THREE.HemisphereLight(0x3a4860, 0x0c1018, this.hemiBase);
     this.flash = new THREE.PointLight(0xffe6b0, 0, 180, 1.4);
     const ringGeo = new THREE.RingGeometry(1.05, 1.18, 48);
     const ringMat = new THREE.MeshBasicMaterial({
@@ -160,6 +168,32 @@ export class World {
     return this._textures;
   }
 
+  applyDisplaySettings(settings: DisplaySettings): void {
+    this.displayFill = settings.brightness;
+    this.renderer.toneMappingExposure = BASE_TONE_MAPPING_EXPOSURE;
+    this.syncFillLighting();
+    const canvas = this.renderer.domElement;
+    const filter = colorTempCssFilter(settings.colorTemp);
+    canvas.style.filter = filter === "none" ? "" : filter;
+  }
+
+  /** Ambient / hemisphere / env fill for readability on dim displays — not sun PointLights. */
+  private syncFillLighting(): void {
+    const fill = this.displayFill;
+    if (this.skyFlareAge > 0) {
+      const u = this.skyFlareAge / 1.6;
+      this.ambient.intensity = (this.ambientBase + 0.5 * u) * fill;
+    } else if (this.finaleActive) {
+      this.ambient.intensity = 0.46 * fill;
+    } else {
+      this.ambient.intensity = this.ambientBase * fill;
+    }
+    this.hemi.intensity = this.hemiBase * fill;
+    if (this.scene.environment) {
+      this.scene.environmentIntensity = this.envBase * fill;
+    }
+  }
+
   private applyEnvironment(skyTex: THREE.Texture): void {
     if (this.envRT) {
       this.envRT.dispose();
@@ -170,7 +204,7 @@ export class World {
     pmrem.dispose();
     this.envRT = envRT;
     this.scene.environment = envRT.texture;
-    this.scene.environmentIntensity = 1.35;
+    this.scene.environmentIntensity = this.envBase * this.displayFill;
   }
 
   private bindContextRestore(canvas: HTMLCanvasElement): void {
@@ -258,8 +292,7 @@ export class World {
     this.savedDamping = this.controls.enableDamping;
     this.controls.enableDamping = false;
     this.controls.autoRotate = false;
-    this.savedAmbient = this.ambient.intensity;
-    this.ambient.intensity = 0.46;
+    this.ambient.intensity = 0.46 * this.displayFill;
     this.trails.reset();
     setupFinaleCamera(state, this.camera, this.controls, bodies);
   }
@@ -270,7 +303,7 @@ export class World {
     this.lastFinaleBodies = [];
     this.controls.enableDamping = this.savedDamping;
     this.controls.autoRotate = false;
-    this.ambient.intensity = this.savedAmbient;
+    this.syncFillLighting();
     this.controls.minDistance = DEFAULT_MIN_DISTANCE;
     this.controls.maxDistance = DEFAULT_MAX_DISTANCE;
     this.camera.near = 0.5;
@@ -568,7 +601,7 @@ export class World {
   skyFlare(): void {
     this.skyFlareAge = 1.6;
     this.ambient.color.copy(this.skyFlareColor);
-    this.ambient.intensity = 0.55;
+    this.ambient.intensity = 0.55 * this.displayFill;
   }
 
   spawnShip(from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }): void {
@@ -671,10 +704,10 @@ export class World {
       this.skyFlareAge = Math.max(0, this.skyFlareAge - dt * 0.7);
       const u = this.skyFlareAge / 1.6;
       this.ambient.color.lerpColors(this.ambientBaseColor, this.skyFlareColor, u);
-      this.ambient.intensity = this.ambientBase + 0.5 * u;
+      this.ambient.intensity = (this.ambientBase + 0.5 * u) * this.displayFill;
     } else {
       this.ambient.color.copy(this.ambientBaseColor);
-      this.ambient.intensity = this.ambientBase;
+      this.syncFillLighting();
     }
     if (this.ship) {
       this.shipT += dt;
